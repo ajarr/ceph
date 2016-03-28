@@ -32,30 +32,6 @@
 
 #define dout_subsys ceph_subsys_bluestore
 
-/*
-
-  TODO:
-
-  * superblock, features
-  * bdev: smarter zeroing
-  * zero overlay in onode?
-  * discard
-  * aio read?
-  * read uses local ioc
-  * refcounted extents (for efficient clone)
-  * overlay does inefficient zeroing on unwritten extent
-
- */
-
-/*
- * Some invariants:
- *
- * - If the end of the object is a partial block, and is not an overlay,
- *   the remainder of that block will always be zeroed.  (It has to be written
- *   anyway, so we may as well have written zeros.)
- *
- */
-
 const string PREFIX_SUPER = "S";   // field -> value
 const string PREFIX_COLL = "C";    // collection name -> cnode_t
 const string PREFIX_OBJ = "O";     // object name -> onode_t
@@ -289,6 +265,18 @@ static void get_enode_key(shard_id_t shard, int64_t pool, uint32_t hash,
   _key_encode_u32(hobject_t::_reverse_bits(hash), key);
 }
 
+static int get_key_enode(const string& key, shard_id_t *shard,
+			 int64_t *pool, uint32_t *hash)
+{
+  const char *p = key.c_str();
+  if (key.length() < 2 + 8 + 4)
+    return -2;
+  p = _key_decode_shard(p, shard);
+  p = _key_decode_u64(p, (uint64_t*)pool);
+  p = _key_decode_u32(p, hash);
+  return 0;
+}
+
 static int get_key_object(const string& key, ghobject_t *oid);
 
 static void get_object_key(const ghobject_t& oid, string *key)
@@ -495,6 +483,7 @@ void BlueStore::OnodeHashLRU::add(const ghobject_t& oid, OnodeRef o)
   assert(onode_map.count(oid) == 0);
   onode_map[oid] = o;
   lru.push_front(*o);
+  _trim(max_size);
 }
 
 BlueStore::OnodeRef BlueStore::OnodeHashLRU::lookup(const ghobject_t& oid)
@@ -582,8 +571,15 @@ bool BlueStore::OnodeHashLRU::get_next(
 int BlueStore::OnodeHashLRU::trim(int max)
 {
   std::lock_guard<std::mutex> l(lock);
-  dout(20) << __func__ << " max " << max
-	   << " size " << onode_map.size() << dendl;
+  if (max < 0) {
+    max = max_size;
+  }
+  return _trim(max);
+}
+
+int BlueStore::OnodeHashLRU::_trim(int max)
+{
+  dout(20) << __func__ << " max " << max << " size " << onode_map.size() << dendl;
   int trimmed = 0;
   int num = onode_map.size() - max;
   if (onode_map.size() == 0 || num <= 0)
@@ -628,8 +624,8 @@ BlueStore::Collection::Collection(BlueStore *ns, coll_t c)
     cid(c),
     lock("BlueStore::Collection::lock", true, false),
     exists(true),
-    onode_map(),
-    enode_set(g_conf->bluestore_onode_map_size)
+    enode_set(g_conf->bluestore_onode_map_size),
+    onode_map(g_conf->bluestore_onode_map_size)
 {
 }
 
@@ -1463,6 +1459,14 @@ int BlueStore::_balance_bluefs_freespace(vector<bluestore_extent_t> *extents,
       gift = g;
     reclaim = 0;
   }
+  if (gift) {
+    float new_bluefs_ratio = (float)(bluefs_free + gift) / (float)total_free;
+    if (new_bluefs_ratio >= g_conf->bluestore_bluefs_max_ratio) {
+      dout(10) << __func__ << " gift would push us past the max_ratio,"
+	       << " doing nothing" << dendl;
+      gift = 0;
+    }
+  }
 
   if (gift) {
     // round up to alloc size
@@ -1947,7 +1951,8 @@ int BlueStore::umount()
 
 int BlueStore::_verify_enode_shared(
   EnodeRef enode,
-  vector<bluestore_extent_t>& v)
+  vector<bluestore_extent_t>& v,
+  interval_set<uint64_t> &used_blocks)
 {
   int errors = 0;
   interval_set<uint64_t> span;
@@ -1973,6 +1978,14 @@ int BlueStore::_verify_enode_shared(
 	 << " != expected " << ref_map << dendl;
     ++errors;
   }
+  interval_set<uint64_t> i;
+  i.intersection_of(span, used_blocks);
+  if (!i.empty()) {
+    derr << " hash " << enode->hash << " extent(s) " << i
+	 << " already allocated" << dendl;
+    ++errors;
+  }
+  used_blocks.insert(span);
   return errors;
 }
 
@@ -1984,6 +1997,7 @@ int BlueStore::fsck()
   set<uint64_t> used_omap_head;
   interval_set<uint64_t> used_blocks;
   KeyValueDB::Iterator it;
+  EnodeRef enode;
   vector<bluestore_extent_t> hash_shared;
 
   int r = _open_path();
@@ -2041,7 +2055,6 @@ int BlueStore::fsck()
     CollectionRef c = _get_collection(p->first);
     RWLock::RLocker l(c->lock);
     ghobject_t pos;
-    EnodeRef enode;
     while (true) {
       vector<ghobject_t> ols;
       int r = collection_list(p->first, pos, ghobject_t::get_max(), true,
@@ -2062,7 +2075,7 @@ int BlueStore::fsck()
 	}
 	if (!enode || enode->hash != o->oid.hobj.get_hash()) {
 	  if (enode)
-	    errors += _verify_enode_shared(enode, hash_shared);
+	    errors += _verify_enode_shared(enode, hash_shared, used_blocks);
 	  enode = c->get_enode(o->oid.hobj.get_hash());
 	  hash_shared.clear();
 	}
@@ -2077,19 +2090,21 @@ int BlueStore::fsck()
 	}
 	// blocks
 	for (auto& b : o->onode.block_map) {
-	  if (b.second.has_flag(bluestore_extent_t::FLAG_SHARED))
+	  if (b.second.has_flag(bluestore_extent_t::FLAG_SHARED)) {
 	    hash_shared.push_back(b.second);
-	  if (used_blocks.intersects(b.second.offset, b.second.length)) {
-	    derr << " " << oid << " extent " << b.first << ": " << b.second
-		 << " already allocated" << dendl;
-	    ++errors;
-	    continue;
-	  }
-	  used_blocks.insert(b.second.offset, b.second.length);
-	  if (b.second.end() > bdev->get_size()) {
-	    derr << " " << oid << " extent " << b.first << ": " << b.second
-		 << " past end of block device" << dendl;
-	    ++errors;
+	  } else {
+	    if (used_blocks.intersects(b.second.offset, b.second.length)) {
+	      derr << " " << oid << " extent " << b.first << ": " << b.second
+		   << " already allocated" << dendl;
+	      ++errors;
+	      continue;
+	    }
+	    used_blocks.insert(b.second.offset, b.second.length);
+	    if (b.second.end() > bdev->get_size()) {
+	      derr << " " << oid << " extent " << b.first << ": " << b.second
+		   << " past end of block device" << dendl;
+	      ++errors;
+	    }
 	  }
 	}
 	// overlays
@@ -2202,19 +2217,46 @@ int BlueStore::fsck()
       }
     }
   }
+  if (enode) {
+    errors += _verify_enode_shared(enode, hash_shared, used_blocks);
+    hash_shared.clear();
+    enode.reset();
+  }
 
-  dout(1) << __func__ << " checking for stray objects" << dendl;
+  dout(1) << __func__ << " checking for stray enodes and onodes" << dendl;
   it = db->get_iterator(PREFIX_OBJ);
   if (it) {
     CollectionRef c;
+    bool expecting_objects = false;
+    shard_id_t expecting_shard;
+    int64_t expecting_pool;
+    uint32_t expecting_hash;
     for (it->lower_bound(string()); it->valid(); it->next()) {
       ghobject_t oid;
+      if (is_enode_key(it->key())) {
+	if (expecting_objects) {
+	  dout(30) << __func__ << "  had enode but no objects for "
+		   << std::hex << expecting_hash << std::dec << dendl;
+	  ++errors;
+	}
+	get_key_enode(it->key(), &expecting_shard, &expecting_pool,
+		      &expecting_hash);
+	continue;
+      }
       int r = get_key_object(it->key(), &oid);
       if (r < 0) {
 	dout(30) << __func__ << "  bad object key "
 		 << pretty_binary_string(it->key()) << dendl;
 	++errors;
 	continue;
+      }
+      if (expecting_objects) {
+	if (oid.hobj.get_bitwise_key_u32() != expecting_hash) {
+	  dout(30) << __func__ << "  had enode but no objects for "
+		   << std::hex << expecting_hash << std::dec << dendl;
+	  ++errors;
+	}
+	expecting_objects = false;
       }
       if (!c || !c->contains(oid)) {
 	c = NULL;
@@ -2234,6 +2276,12 @@ int BlueStore::fsck()
 	  continue;
 	}
       }
+    }
+    if (expecting_objects) {
+      dout(30) << __func__ << "  had enode but no objects for "
+	       << std::hex << expecting_hash << std::dec << dendl;
+      ++errors;
+      expecting_objects = false;
     }
   }
 
@@ -3782,7 +3830,7 @@ void BlueStore::_osr_reap_done(OpSequencer *osr)
     }
 
     if (txc->first_collection) {
-      txc->first_collection->onode_map.trim(g_conf->bluestore_onode_map_size);
+      txc->first_collection->onode_map.trim();
     }
 
     osr->q.pop_front();
@@ -3856,38 +3904,23 @@ void BlueStore::_kv_sync_thread()
       dout(30) << __func__ << " committing txc " << kv_committing << dendl;
       dout(30) << __func__ << " wal_cleaning txc " << wal_cleaning << dendl;
 
-      // one transaction to force a sync
-      KeyValueDB::Transaction t = db->get_transaction();
+      alloc->commit_start();
 
-      // allocations and deallocations
-      interval_set<uint64_t> released;
-      for (std::deque<TransContext *>::iterator it = wal_cleaning.begin();
-	  it != wal_cleaning.end();
-	  ++it) {
-	TransContext *txc = *it;
-	if (!txc->wal_txn->released.empty()) {
-	  dout(20) << __func__ << " txc " << txc
-	    << " (post-wal) released " << txc->wal_txn->released
-	    << dendl;
-	  released.insert(txc->wal_txn->released);
-	  for (interval_set<uint64_t>::iterator p =
-	      txc->wal_txn->released.begin();
-	      p != txc->wal_txn->released.end();
-	      ++p) {
-	    dout(20) << __func__ << " release " << p.get_start()
-	      << "~" << p.get_len() << dendl;
-	    fm->release(p.get_start(), p.get_len(), t);
-	  }
+      // flush/barrier on block device
+      bdev->flush();
+
+      if (!g_conf->bluestore_sync_transaction &&
+	  !g_conf->bluestore_sync_submit_transaction) {
+	for (std::deque<TransContext *>::iterator it = kv_committing.begin();
+	     it != kv_committing.end();
+	     ++it) {
+	  _txc_update_fm((*it));
+	  db->submit_transaction((*it)->t);
 	}
       }
-      for (interval_set<uint64_t>::iterator p = released.begin();
-	   p != released.end();
-	   ++p) {
-	dout(20) << __func__ << " release " << p.get_start()
-		 << "~" << p.get_len() << dendl;
-	if (!g_conf->bluestore_debug_no_reuse_blocks)
-	  alloc->release(p.get_start(), p.get_len());
-      }
+
+      // one final transaction to force a sync
+      KeyValueDB::Transaction t = db->get_transaction();
 
       vector<bluestore_extent_t> bluefs_gift_extents;
       if (bluefs) {
@@ -3906,17 +3939,25 @@ void BlueStore::_kv_sync_thread()
 	}
       }
 
-      alloc->commit_start();
-
-      // flush/barrier on block device
-      bdev->flush();
-
-      if (!g_conf->bluestore_sync_transaction && !g_conf->bluestore_sync_submit_transaction) {
-	for (std::deque<TransContext *>::iterator it = kv_committing.begin();
-	     it != kv_committing.end();
-	     ++it) {
-	  _txc_update_fm((*it));
-	  db->submit_transaction((*it)->t);
+      // allocations and deallocations
+      for (std::deque<TransContext *>::iterator it = wal_cleaning.begin();
+	  it != wal_cleaning.end();
+	  ++it) {
+	TransContext *txc = *it;
+	if (!txc->wal_txn->released.empty()) {
+	  dout(20) << __func__ << " txc " << txc
+	    << " (post-wal) released " << txc->wal_txn->released
+	    << dendl;
+	  for (interval_set<uint64_t>::iterator p =
+	      txc->wal_txn->released.begin();
+	      p != txc->wal_txn->released.end();
+	      ++p) {
+	    dout(20) << __func__ << " release " << p.get_start()
+	      << "~" << p.get_len() << dendl;
+	    fm->release(p.get_start(), p.get_len(), t);
+	    if (!g_conf->bluestore_debug_no_reuse_blocks)
+	      alloc->release(p.get_start(), p.get_len());
+	  }
 	}
       }
 
@@ -3941,6 +3982,7 @@ void BlueStore::_kv_sync_thread()
 	t->rmkey(PREFIX_WAL, key);
       }
       db->submit_transaction_sync(t);
+
       utime_t finish = ceph_clock_now(NULL);
       utime_t dur = finish - start;
       dout(20) << __func__ << " committed " << kv_committing.size()
@@ -3991,6 +4033,16 @@ int BlueStore::_wal_apply(TransContext *txc)
   txc->log_state_latency(logger, l_bluestore_state_wal_queued_lat);
   txc->state = TransContext::STATE_WAL_APPLYING;
 
+  if (g_conf->bluestore_inject_wal_apply_delay) {
+    dout(20) << __func__ << " bluestore_inject_wal_apply_delay "
+	     << g_conf->bluestore_inject_wal_apply_delay
+	     << dendl;
+    utime_t t;
+    t.set_from_double(g_conf->bluestore_inject_wal_apply_delay);
+    t.sleep();
+    dout(20) << __func__ << " finished sleep" << dendl;
+  }
+
   assert(txc->ioc.pending_aios.empty());
   vector<OnodeRef>::iterator q = txc->wal_op_onodes.begin();
   for (list<bluestore_wal_op_t>::iterator p = wt.ops.begin();
@@ -4009,8 +4061,10 @@ int BlueStore::_wal_finish(TransContext *txc)
   bluestore_wal_transaction_t& wt = *txc->wal_txn;
   dout(20) << __func__ << " txc " << " seq " << wt.seq << txc << dendl;
 
+  std::lock_guard<std::mutex> l2(txc->osr->qlock);
   std::lock_guard<std::mutex> l(kv_lock);
   txc->state = TransContext::STATE_WAL_CLEANUP;
+  txc->osr->qcond.notify_all();
   wal_cleanup_queue.push_back(txc);
   kv_cond.notify_one();
   return 0;
@@ -4877,6 +4931,7 @@ void BlueStore::_dump_onode(OnodeRef o, int log_level)
 }
 
 void BlueStore::_pad_zeros(
+  TransContext *txc,
   OnodeRef o,
   bufferlist *bl, uint64_t *offset, uint64_t *length,
   uint64_t block_size)
@@ -4921,10 +4976,11 @@ void BlueStore::_pad_zeros(
     bl->substr_of(old, 0, *length - back_copy);
     bl->append(tail);
     *length += back_pad;
-    if (end > o->onode.size && g_conf->bluestore_cache_tails) {
+    if (end >= o->onode.size && g_conf->bluestore_cache_tails) {
       o->tail_bl.clear();
       o->tail_bl.append(tail, 0, back_copy);
       o->tail_offset = end - back_copy;
+      o->tail_txc_seq = txc->seq;
       dout(20) << __func__ << " cached "<< back_copy << " of tail block at "
 	       << o->tail_offset << dendl;
     }
@@ -4971,6 +5027,7 @@ void BlueStore::_pad_zeros_head(
 }
 
 void BlueStore::_pad_zeros_tail(
+  TransContext *txc,
   OnodeRef o,
   bufferlist *bl, uint64_t offset, uint64_t *length,
   uint64_t block_size)
@@ -5002,10 +5059,12 @@ void BlueStore::_pad_zeros_tail(
   bl->substr_of(old, 0, *length - back_copy);
   bl->append(tail);
   *length += back_pad;
-  if (end > o->onode.size && g_conf->bluestore_cache_tails) {
+  if (tail_len == block_size &&
+      end >= o->onode.size && g_conf->bluestore_cache_tails) {
     o->tail_bl.clear();
     o->tail_bl.append(tail, 0, back_copy);
     o->tail_offset = end - back_copy;
+    o->tail_txc_seq = txc->seq;
     dout(20) << __func__ << " cached "<< back_copy << " of tail block at "
 	     << o->tail_offset << dendl;
   }
@@ -5067,7 +5126,8 @@ int BlueStore::_do_allocate(
   bool shared_head = false;
   bool shared_tail = false;
   uint64_t orig_end = orig_offset + orig_length;
-  if (orig_offset / min_alloc_size == (orig_end - 1)/ min_alloc_size && (orig_length != min_alloc_size)) {
+  if (orig_offset / min_alloc_size == (orig_end - 1) / min_alloc_size &&
+      (orig_length != min_alloc_size)) {
     // we fall within the same block
     offset = orig_offset - orig_offset % min_alloc_size;
     length = 0;
@@ -5364,22 +5424,14 @@ int BlueStore::_do_write(
 
   bp = o->onode.seek_extent(orig_offset);
 
-  // zero tail of previous existing extent?
-  // (this happens if the old eof was partway through a previous extent,
-  // and we implicitly zero the rest of it by writing to a larger offset.)
   if (orig_offset > o->onode.size) {
-    uint64_t end = ROUND_UP_TO(o->onode.size, block_size);
-    map<uint64_t, bluestore_extent_t>::iterator pp = o->onode.find_extent(end);
-    if (orig_offset > end &&
-	pp != o->onode.block_map.end() &&
+    // zero tail of previous existing extent?
+    map<uint64_t, bluestore_extent_t>::iterator pp =
+      o->onode.find_extent(o->onode.size);
+    if (pp != o->onode.block_map.end() &&
 	pp != bp) {
       assert(pp->first < bp->first);
-      uint64_t x_off = end - pp->first;
-      uint64_t x_len = pp->second.length - x_off;
-      dout(10) << __func__ << " zero tail " << x_off << "~" << x_len
-	       << " of prior extent " << pp->first << ": " << pp->second
-	       << dendl;
-      bdev->aio_zero(pp->second.offset + x_off, x_len, &txc->ioc);
+      _do_zero_tail_extent(txc, o, orig_offset, pp);
     }
   }
 
@@ -5424,12 +5476,12 @@ int BlueStore::_do_write(
     assert(offset >= bp->first);
     assert(offset + length <= bp->first + bp->second.length);
 
-    // (pad and) overwrite unused portion of extent for an append?
+    // overwrite unused portion of extent for an append?
     if (offset > bp->first &&
-	offset >= o->onode.size &&                                  // past eof +
-	(offset / block_size != (o->onode.size - 1) / block_size)) {// diff block
-      dout(20) << __func__ << " append" << dendl;
-      _pad_zeros(o, &bl, &offset, &length, block_size);
+	offset >= o->onode.size &&                  // past eof +
+	(o->onode.size & ~block_mask) == 0) {       // eof was aligned
+      dout(20) << __func__ << " append after aligned eof" << dendl;
+      _pad_zeros(txc, o, &bl, &offset, &length, block_size);
       assert(offset % block_size == 0);
       assert(length % block_size == 0);
       uint64_t x_off = offset - bp->first;
@@ -5466,10 +5518,13 @@ int BlueStore::_do_write(
     if (offset >= bp->first &&
 	offset > tail_start &&
 	offset + length >= o->onode.size &&
+	o->tail_offset == tail_start &&
 	o->tail_bl.length() &&
 	(offset / block_size == (o->onode.size - 1) / block_size)) {
       dout(20) << __func__ << " using cached tail" << dendl;
       assert((offset & block_mask) == (o->onode.size & block_mask));
+      // wait for any related wal writes to commit
+      txc->osr->wait_for_wal_on_seq(o->tail_txc_seq);
       uint64_t tail_off = offset % block_size;
       if (tail_off >= o->tail_bl.length()) {
 	bufferlist t;
@@ -5497,7 +5552,7 @@ int BlueStore::_do_write(
 	     offset == bp->first);
       bp->second.clear_flag(bluestore_extent_t::FLAG_COW_HEAD);
       bp->second.clear_flag(bluestore_extent_t::FLAG_UNWRITTEN);
-      _pad_zeros(o, &bl, &offset, &length, block_size);
+      _pad_zeros(txc, o, &bl, &offset, &length, block_size);
       uint64_t x_off = offset - bp->first;
       dout(20) << __func__ << " write " << offset << "~" << length
 	       << " x_off " << x_off << dendl;
@@ -5541,7 +5596,7 @@ int BlueStore::_do_write(
 	_pad_zeros_head(o, &bl, &offset, &length, block_size);
       }
       if (((offset + length) & ~block_mask) != 0 && !cow_rmw_tail) {
-	_pad_zeros_tail(o, &bl, offset, &length, block_size);
+	_pad_zeros_tail(txc, o, &bl, offset, &length, block_size);
       }
       if ((offset & ~block_mask) == 0 && (length & ~block_mask) == 0) {
 	uint64_t x_off = offset - bp->first;
@@ -5563,9 +5618,24 @@ int BlueStore::_do_write(
       goto out;
     assert(bp->first <= offset);
     assert(offset + length <= bp->first + bp->second.length);
+    bool is_orig_offset = offset == orig_offset;
+    if (offset > o->onode.size &&
+	o->onode.size > bp->first) {
+      uint64_t zlen = offset - o->onode.size;
+      dout(20) << __func__ << " padding " << zlen << " zeroes from eof "
+	       << o->onode.size << " to " << offset << dendl;
+      bufferlist z;
+      z.append_zero(zlen);
+      z.claim_append(bl);
+      bl.swap(z);
+      offset -= zlen;
+      length += zlen;
+      if (cow_rmw_head)
+	cow_rmw_head -= zlen;
+    }
     bluestore_wal_op_t *op = _get_wal_op(txc, o);
     op->op = bluestore_wal_op_t::OP_WRITE;
-    if (offset == orig_offset && cow_rmw_head) {
+    if (is_orig_offset && cow_rmw_head) {
       op->src_rmw_head = cow_rmw_head;
       dout(20) << __func__ << " src_rmw_head " << op->src_rmw_head << dendl;
     }
@@ -5575,7 +5645,7 @@ int BlueStore::_do_write(
     } else if (((offset + length) & ~block_mask) &&
 	       offset + length > o->onode.size) {
       dout(20) << __func__ << " past eof, padding out tail block" << dendl;
-      _pad_zeros_tail(o, &bl, offset, &length, block_size);
+      _pad_zeros_tail(txc, o, &bl, offset, &length, block_size);
     }
     bp->second.clear_flag(bluestore_extent_t::FLAG_COW_HEAD);
     bp->second.clear_flag(bluestore_extent_t::FLAG_COW_TAIL);
@@ -5653,13 +5723,78 @@ int BlueStore::_do_write_zero(
 {
   bufferlist zl;
   zl.append_zero(length);
-  return _do_write(txc, c, o, offset, length, zl, 0);
+  uint64_t old_size = o->onode.size;
+  int r = _do_write(txc, c, o, offset, length, zl, 0);
+  // we do not modify onode size
+  o->onode.size = old_size;
+  return r;
 }
 
 int BlueStore::_zero(TransContext *txc,
 		     CollectionRef& c,
 		     OnodeRef& o,
 		     uint64_t offset, size_t length)
+{
+  dout(15) << __func__ << " " << c->cid << " " << o->oid
+	   << " " << offset << "~" << length
+	   << dendl;
+  int r = _do_zero(txc, c, o, offset, length);
+  dout(10) << __func__ << " " << c->cid << " " << o->oid
+	   << " " << offset << "~" << length
+	   << " = " << r << dendl;
+  return r;
+}
+
+void BlueStore::_do_zero_tail_extent(
+  TransContext *txc,
+  OnodeRef& o,
+  uint64_t offset,
+  map<uint64_t, bluestore_extent_t>::iterator pp)
+{
+  const uint64_t block_size = bdev->get_block_size();
+  const uint64_t block_mask = ~(block_size - 1);
+
+  assert(offset > o->onode.size);
+  assert(pp != o->onode.block_map.end());
+
+  // we assume the caller will handle any partial block they start with
+  offset &= block_mask;
+  if (offset <= o->onode.size)
+    return;
+
+  uint64_t end_block = ROUND_UP_TO(o->onode.size, block_size);
+
+  assert(!pp->second.has_flag(bluestore_extent_t::FLAG_SHARED));
+
+  if (end_block > o->onode.size) {
+    // end was in a partial block, do wal r/m/w.
+    bluestore_wal_op_t *op = _get_wal_op(txc, o);
+    op->op = bluestore_wal_op_t::OP_ZERO;
+    uint64_t x_off = o->onode.size;
+    uint64_t x_len = end_block - x_off;
+    op->extent.offset = pp->second.offset + x_off - pp->first;
+    op->extent.length = x_len;
+    dout(10) << __func__ << " wal zero tail partial block "
+	     << x_off << "~" << x_len << " at " << op->extent
+	     << dendl;
+    assert(!pp->second.has_flag(bluestore_extent_t::FLAG_COW_HEAD));
+    assert(!pp->second.has_flag(bluestore_extent_t::FLAG_COW_TAIL));    
+  }
+  if (offset > end_block) {
+    // end was block-aligned.  zero the rest of the extent now.
+    uint64_t x_off = end_block - pp->first;
+    uint64_t x_len = pp->second.length - x_off;
+    dout(10) << __func__ << " zero tail " << x_off << "~" << x_len
+	     << " of tail extent " << pp->first << ": " << pp->second
+	     << dendl;
+    bdev->aio_zero(pp->second.offset + x_off, x_len, &txc->ioc);
+  }
+}
+
+int BlueStore::_do_zero(TransContext *txc,
+			CollectionRef& c,
+			OnodeRef& o,
+			uint64_t offset, size_t length)
 {
   dout(15) << __func__ << " " << c->cid << " " << o->oid
 	   << " " << offset << "~" << length
@@ -5676,20 +5811,21 @@ int BlueStore::_zero(TransContext *txc,
   uint64_t block_size = bdev->get_block_size();
   map<uint64_t,bluestore_extent_t>::iterator bp = o->onode.seek_extent(offset);
 
-  // zero tail of previous existing extent?
-  // (this happens if the old eof was partway through a previous extent,
-  // and we implicitly zero the rest of it by writing to a larger offset.)
   if (offset > o->onode.size) {
-    uint64_t end = ROUND_UP_TO(o->onode.size, block_size);
-    map<uint64_t, bluestore_extent_t>::iterator pp = o->onode.find_extent(end);
-    if (offset > end &&
-	pp != o->onode.block_map.end()) {
-      uint64_t x_off = end - pp->first;
-      uint64_t x_len = pp->second.length - x_off;
-      dout(10) << __func__ << " zero tail " << x_off << "~" << x_len
-	       << " of prior extent " << pp->first << ": " << pp->second
-	       << dendl;
-      bdev->aio_zero(pp->second.offset + x_off, x_len, &txc->ioc);
+    map<uint64_t, bluestore_extent_t>::iterator pp =
+      o->onode.find_extent(o->onode.size);
+    if (pp != o->onode.block_map.end() &&
+	pp != bp) {
+      if (pp->second.has_flag(bluestore_extent_t::FLAG_SHARED)) {
+	dout(10) << __func__ << " shared tail extent; doing _do_write_zero"
+		 << dendl;
+	uint64_t old_size = o->onode.size;
+	uint64_t end = bp->first + bp->second.length - old_size;
+	uint64_t zlen = end - old_size;
+	_do_write_zero(txc, c, o, old_size, zlen);
+      } else {
+	_do_zero_tail_extent(txc, o, offset, pp);
+      }
     }
   }
 
@@ -5714,6 +5850,14 @@ int BlueStore::_zero(TransContext *txc,
     // start,end are offsets in the extent
     uint64_t x_off = 0;
     if (offset > bp->first) {
+      if (offset > o->onode.size &&
+	  o->onode.size >= bp->first) {
+	uint64_t zlen = offset - o->onode.size;
+	dout(10) << __func__ << " extending range by " << zlen
+		 << " to start from eof " << o->onode.size << dendl;
+	offset -= zlen;
+	length += zlen;
+      }
       x_off = offset - bp->first;
     }
     uint64_t x_len = MIN(offset + length - bp->first,
@@ -5832,7 +5976,6 @@ int BlueStore::_do_truncate(
         int r = _do_write_zero(txc, c, o, old_size, x_len);
         if (r < 0)
           return r;
-	o->onode.size = offset; // we (maybe) just wrote past eof; reset size
       } else {
 	bluestore_wal_op_t *op = _get_wal_op(txc, o);
 	op->op = bluestore_wal_op_t::OP_ZERO;
@@ -5840,26 +5983,6 @@ int BlueStore::_do_truncate(
 	op->extent.length = x_len;
 	dout(20) << __func__ << "  wal zero " << x_off << "~" << x_len
 		 << " " << op->extent << dendl;
-      }
-    }
-  } else if (offset < old_size &&
-	     offset % block_size != 0) {
-    // zero trailing block?
-    map<uint64_t,bluestore_extent_t>::iterator bp = o->onode.find_extent(offset);
-    if (bp != o->onode.block_map.end()) {
-      uint64_t z_len = block_size - offset % block_size;
-      if (bp->second.has_flag(bluestore_extent_t::FLAG_SHARED)) {
-        int r = _do_write_zero(txc, c, o, offset, z_len);
-        if (r < 0)
-          return r;
-	o->onode.size = offset; // we just wrote past eof; reset size
-      } else {
-	bluestore_wal_op_t *op = _get_wal_op(txc, o);
-	op->op = bluestore_wal_op_t::OP_ZERO;
-	op->extent.offset = bp->second.offset + offset - bp->first;
-	op->extent.length = block_size - offset % block_size;
-	dout(20) << __func__ << " wal zero tail " << offset << "~" << z_len
-		 << " at " << op->extent << dendl;
       }
     }
   }

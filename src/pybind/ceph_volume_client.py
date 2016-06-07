@@ -223,7 +223,6 @@ class CephFSVolumeClient(object):
         self.auth_id = auth_id
         self.volume_prefix = volume_prefix if volume_prefix else self.DEFAULT_VOL_PREFIX
         self.pool_ns_prefix = pool_ns_prefix if pool_ns_prefix else self.DEFAULT_NS_PREFIX
-
         # For flock'ing in cephfs, I want a unique ID to distinguish me
         # from any other manila-share services that are loading this module.
         # We could use pid, but that's unnecessary weak: generate a
@@ -236,10 +235,8 @@ class CephFSVolumeClient(object):
         # TODO: remove .meta files on last rule for an auth ID deletion
         # TODO: implement fsync in bindings so that we don't have to syncfs
         # TODO: version the on-disk structures
-        # TODO: check dirty flag after locking something and call recover()
-        # if we are opening something dirty (racing with another instance
-        # of the driver restarting after failure) -- only required if someone
-        # running multiple manila-share instances with Ceph loaded.
+
+        self.recover()
 
     def recover(self):
         # Scan all auth keys to see if they're dirty: if they are, they have
@@ -285,27 +282,32 @@ class CephFSVolumeClient(object):
                 auth_meta = self._auth_metadata_get(auth_id)
                 if not auth_meta or not auth_meta['dirty']:
                     continue
+                self._recover_auth_meta(auth_meta)
 
-                for volume in auth_meta['volumes']:
-                    volume_path = VolumePath(volume['volume_id'],
-                                             volume['group_id'])
-                    access_level = volume['access_level']
+    def _recover_auth_meta(auth_meta):
+        """
+        Call me after locking the auth meta file.
+        """
+        for volume in auth_meta['volumes']:
+            volume_path = VolumePath(volume['volume_id'],
+                                     volume['group_id'])
+            access_level = volume['access_level']
 
-                    with self._volume_lock(volume_path):
-                        volume_meta = self._volume_metadata_get(volume_path)
+            with self._volume_lock(volume_path):
+                volume_meta = self._volume_metadata_get(volume_path)
 
-                        auth = {
-                            'id': auth_id,
-                            'access_level': access_level
-                        }
+                auth = {
+                    'id': auth_id,
+                    'access_level': access_level
+                }
 
-                        if (auth not in volume_meta['auths'] or
-                            volume_meta['dirty']):
-                            readonly = True if access_level is 'r' else False
-                            self._authorize_volume(volume_path, auth_id, readonly)
+                if (auth not in volume_meta['auths'] or
+                    volume_meta['dirty']):
+                    readonly = True if access_level is 'r' else False
+                    self._authorize_volume(volume_path, auth_id, readonly)
 
-                auth_meta['dirty'] = False
-                self._auth_metadata_set(auth_id, auth_meta)
+        auth_meta['dirty'] = False
+        self._auth_metadata_set(auth_id, auth_meta)
 
     def evict(self, auth_id, timeout=30, volume_path=None):
         """
@@ -760,6 +762,7 @@ class CephFSVolumeClient(object):
         :param tenant_id: Optionally provide a stringizable object to
                           restrict any created cephx IDs to other callers
                           passing the same tenant ID.
+        :param recover:
         :return:
         """
 
@@ -794,6 +797,9 @@ class CephFSVolumeClient(object):
                 # have mon auth caps that prevent it from accessing those keys
                 # (e.g. limit it to only access keys with a manila.* prefix)
             else:
+                if auth_meta['dirty']:
+                    self._recover_auth_meta(auth_meta)
+
                 log.debug("Authorize: existing tenant {tenant}".format(
                     tenant=auth_meta['tenant_id']
                 ))
@@ -959,6 +965,9 @@ class CephFSVolumeClient(object):
                     auth_id=auth_id
                 ))
                 return
+
+            if auth_meta['dirty']:
+                self._recover_auth_meta(auth_meta)
 
             volume = {
                 'group_id': volume_path.group_id,

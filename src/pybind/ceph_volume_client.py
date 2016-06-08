@@ -229,8 +229,6 @@ class CephFSVolumeClient(object):
         # UUID
         self._id = struct.unpack(">Q", uuid.uuid1().get_bytes()[0:8])[0]
 
-        # TODO: prevent craftily-named volumes from colliding with
-        # ".meta" filenames
         # TODO: remove .meta files on volume deletion
         # TODO: remove .meta files on last rule for an auth ID deletion
         # TODO: version the on-disk structures
@@ -497,6 +495,8 @@ class CephFSVolumeClient(object):
             return pool_id
 
     def create_group(self, group_id):
+        if group_id.endswith(".meta"):
+            raise ValueError("group ID cannot end with '.meta'.")
         path = self._get_group_path(group_id)
         self._mkdir_p(path)
 

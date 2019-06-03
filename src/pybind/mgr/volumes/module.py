@@ -63,7 +63,7 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
             'cmd': 'fs subvolume create '
                    'name=vol_name,type=CephString '
                    'name=sub_name,type=CephString '
-                   'name=size,type=CephInt,req=false '
+                   'name=size,type=CephString,req=false '
                    'name=group_name,type=CephString,req=false ',
             'desc': "Create a CephFS subvolume in a volume, and optionally, "
                     "with a specific size (in bytes) and in a specific "

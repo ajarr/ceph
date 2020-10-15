@@ -426,14 +426,23 @@ def cephfs_setup(ctx, config):
     # If there are any MDSs, then create a filesystem for them to use
     # Do this last because requires mon cluster to be up and running
     if mdss.remotes:
-        log.info('Setting up CephFS filesystem...')
-
-        fs = Filesystem(ctx, name='cephfs', create=True,
-                        ec_profile=config.get('cephfs_ec_profile', None))
-
-        max_mds = config.get('max_mds', 1)
-        if max_mds > 1:
-            fs.set_max_mds(max_mds)
+        log.info('Setting up CephFS filesystem(s)...')
+        cephfs_names = config.get('cephfs')
+        if cephfs_names is None:
+            cephfs_names = ['cephfs', ]
+            set_allow_multifs = False
+        else:
+            set_allow_multifs = True
+        for cephfs_name in cephfs_names:
+            fs = Filesystem(ctx, name=cephfs_name, create=True,
+                    ec_profile=config.get('cephfs_ec_profile', None))
+            max_mds = config.get('max_mds', 1)
+            if max_mds > 1:
+                fs.set_max_mds(max_mds)
+            if set_allow_multifs:
+                # set multifs flag once
+                fs.set_allow_multifs()
+                set_allow_multifs = False
 
     yield
 

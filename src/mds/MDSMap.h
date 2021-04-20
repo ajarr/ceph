@@ -264,6 +264,7 @@ public:
 
   const std::string get_balancer() const { return balancer; }
   void set_balancer(std::string val) { balancer.assign(val); }
+  void set_fs_name(std::string new_fs_name) { fs_name = new_fs_name; }
 
   mds_rank_t get_tableserver() const { return tableserver; }
   mds_rank_t get_root() const { return root; }

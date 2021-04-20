@@ -968,6 +968,63 @@ class ResetFilesystemHandler : public FileSystemCommandHandler
   }
 };
 
+class RenameFilesystemHandler : public FileSystemCommandHandler
+{
+  public:
+  RenameFilesystemHandler()
+    : FileSystemCommandHandler("fs rename")
+  {}
+
+  int handle(
+      Monitor *mon,
+      FSMap& fsmap,
+      MonOpRequestRef op,
+      const cmdmap_t& cmdmap,
+      std::stringstream &ss) override
+  {
+    string fs_name;
+    cmd_getval(cmdmap, "fs_name", fs_name);
+    auto fs = fsmap.get_filesystem(fs_name);
+    if (fs == nullptr) {
+        ss << "filesystem '" << fs_name << "' does not exist";
+        // Unlike fs rm, we consider this case an error
+        return -ENOENT;
+    }
+
+    // Check for confirmation flag
+    bool sure = false;
+    cmd_getval(cmdmap, "yes_i_really_mean_it", sure);
+    if (!sure) {
+      ss << "this is a potentially disruptive optionw, clients need to use IDs with access to new fs name.  "
+        "Add --yes-i-really-mean-it if you are sure you wish to continue.";
+      return -EPERM;
+    }
+
+    // check new filesystem doesn't already exist!
+    string new_fs_name;
+    cmd_getval(cmdmap, "new_fs_name", new_fs_name);
+    auto new_fs = fsmap.get_filesystem(new_fs_name);
+    if (!(new_fs == nullptr)) {
+        ss << "desired filesystem '" << new_fs_name << "' already exists";
+        return -EINVAL;
+    }
+
+    fsmap.modify_filesystem(
+        fs->fscid,
+        [new_fs_name](std::shared_ptr<Filesystem> fs)
+    {
+      fs->mds_map.set_fs_name(new_fs_name);
+    });
+
+//    auto f = [new_fs_name](auto &&fs) {
+//               fs->mds_map.fs_name = new_fs_name;
+//             };
+//    fsmap.modify_filesystem(fs->fscid, std::move(f));
+
+    return 0;
+  }
+};
+
 class RemoveDataPoolHandler : public FileSystemCommandHandler
 {
   public:
@@ -1281,6 +1338,7 @@ FileSystemCommandHandler::load(Paxos *paxos)
   handlers.push_back(std::make_shared<FsNewHandler>(paxos));
   handlers.push_back(std::make_shared<RemoveFilesystemHandler>());
   handlers.push_back(std::make_shared<ResetFilesystemHandler>());
+  handlers.push_back(std::make_shared<RenameFilesystemHandler>());
 
   handlers.push_back(std::make_shared<SetDefaultHandler>());
   handlers.push_back(std::make_shared<AliasHandler<SetDefaultHandler> >(

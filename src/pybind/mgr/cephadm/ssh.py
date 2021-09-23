@@ -75,7 +75,9 @@ class SSHManager:
 
             with self.redirect_log(host, addr):
                 try:
-                    conn = await asyncssh.connect(addr, username=self.mgr.ssh_user, client_keys=[self.mgr.tkey.name], known_hosts=None, config=[self.mgr.ssh_config_fname], preferred_auth=['publickey'])
+                    logger.debug(f"Ramana debugging. Addr = {addr}, Username = {self.mgr.ssh_user}, client_keys = {self.mgr.tkey.name}, config = {self.mgr.ssh_config_fname}")
+                    conn = await asyncssh.connect(addr, username=self.mgr.ssh_user, password="redhat", known_hosts=None, config=[self.mgr.ssh_config_fname])
+                    # conn = await asyncssh.connect(addr, username=self.mgr.ssh_user, client_keys=[self.mgr.tkey.name], known_hosts=None, config=[self.mgr.ssh_config_fname], preferred_auth=['publickey'])
                 except OSError:
                     raise
                 except asyncssh.Error:

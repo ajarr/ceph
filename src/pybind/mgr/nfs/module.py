@@ -41,6 +41,24 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                                              read_only=readonly, path=path,
                                              squash=squash, addr=client_addr)
 
+    # can I make this interface less ugly and more flexible to other client access types such as None, MD_ONLY etc?
+    # adding "none_client_addr", "none_squash", "mdonly_client_addr", "mdonly_squash" as client arguments seems ugly.
+    @CLICommand('nfs export update cephfs', perm='rw')
+    def _cmd_nfs_export_update_cephfs(
+            self,
+            cluster_id: str,
+            pseudo_path: str,
+            rw_client_addr: Optional[List[str]] = None,
+            rw_squash: str = 'none',
+            ro_client_addr: Optional[List[str]] = None,
+            ro_squash: str = 'none',
+    ) -> Tuple[int, str, str]:
+        """Create a CephFS export"""
+        return self.export_mgr.update_cephfs_export(
+            cluster_id=cluster_id, pseudo_path=pseudo_path,
+            rw_client_addr=rw_client_addr, rw_squash=rw_squash,
+            ro_client_addr=ro_client_addr, ro_squash=ro_squash)
+
     @CLICommand('nfs export create rgw', perm='rw')
     def _cmd_nfs_export_create_rgw(
             self,

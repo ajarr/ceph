@@ -8,7 +8,7 @@ from rados import TimedOut, ObjectNotFound
 
 from mgr_module import NFS_POOL_NAME as POOL_NAME, NFS_GANESHA_SUPPORTED_FSALS
 
-from .export_utils import GaneshaConfParser, Export, RawBlock, CephFSFSAL, RGWFSAL
+from .export_utils import GaneshaConfParser, Export, RawBlock, CephFSFSAL, RGWFSAL, Client
 from .exception import NFSException, NFSInvalidOperation, FSNotFound, \
     ClusterNotFound
 from .utils import available_clusters, check_fs, restart_nfs_service
@@ -349,6 +349,40 @@ class ExportMgr:
             raise NotImplementedError()
         except Exception as e:
             return exception_handler(e, f"Failed to create {kwargs['pseudo_path']} export for {kwargs['cluster_id']}")
+
+    @export_cluster_checker
+    def update_cephfs_export(self, cluster_id: str, pseudo_path: str, **kwargs: Any) -> Tuple[int, str, str]:
+        export = self._fetch_export(cluster_id, pseudo_path)
+        if not export:
+            return (-errno.ENOENT, "",
+                    f"'{pseudo_path}' export does not exist for cluster '{cluster_id}'")
+
+        clients = []
+        if kwargs['rw_client_addr']:
+            rw_client = Client.from_dict({
+                'addresses': kwargs['rw_client_addr'],
+                'access_type': 'rw',
+                'squash': kwargs['rw_squash']
+            })
+            clients.append(rw_client)
+
+        if kwargs['ro_client_addr']:
+            ro_client = Client.from_dict({
+                'addresses': kwargs['ro_client_addr'],
+                'access_type': 'ro',
+                'squash': kwargs['ro_squash']
+            })
+            clients.append(ro_client)
+
+        export.clients = clients
+        # This will be tricky. CephFS exports created with access type 'ro' will be using export cephx IDs
+        # with MDS ceph caps 'ro' (See _create_export_user() for more details). So that will have to be
+        # changed to 'rw' if there is a rw client addr. Will updating the ceph caps from 'ro' to 'rw'
+        # using `ceph auth caps` be dynamic?  If not, the NFS server will need to be restarted?
+        NFSRados(self.mgr, cluster_id).update_obj(
+            GaneshaConfParser.write_block(export.to_export_block()),
+            f'export-{export.export_id}', f'conf-nfs.{export.cluster_id}')
+        return (0, json.dumps(export.to_dict(), indent=4), '')
 
     @export_cluster_checker
     def delete_export(self,

@@ -258,6 +258,16 @@ class TestNFS(MgrTestCase):
         info_output = json.loads(self._nfs_cmd('cluster', 'info', self.cluster_id))['test']['backend'][0]
         return info_output["port"], info_output["ip"]
 
+    def _get_nfs_container_ids(self):
+        '''
+        Return list of container IDs of nfs daemons in the nfs service
+        '''
+        nfs_service_status = json.loads(self._fetch_nfs_status())
+        nfs_container_ids = []
+        for nfs_daemon in nfs_service_status:
+            nfs_container_ids.append(nfs_daemon['container_id'])
+        return nfs_container_ids
+
     def _test_mnt(self, pseudo_path, port, ip, check=True):
         '''
         Test mounting of created exports
@@ -604,11 +614,12 @@ class TestNFS(MgrTestCase):
 
     def test_update_export(self):
         '''
-        Test update of exports
+        Test update of export's pseudo path and access type from rw to ro
         '''
         self._create_default_export()
         port, ip = self._get_port_ip_info()
         self._test_mnt(self.pseudo_path, port, ip)
+        original_nfs_container_ids = self._get_nfs_container_ids()
         export_block = self._get_export()
         new_pseudo_path = '/testing'
         export_block['pseudo'] = new_pseudo_path
@@ -617,7 +628,35 @@ class TestNFS(MgrTestCase):
                                    self.cluster_id, '-i', '-'],
                              stdin=json.dumps(export_block))
         self._check_nfs_cluster_status('running', 'NFS Ganesha cluster restart failed')
+        # updating export's pseudo path should trigger restart of NFS service
+        self.assertNotEqual(
+            original_nfs_container_ids.sort(), self._get_nfs_container_ids().sort(),
+            "expected NFS server daemons' container IDs to change after restart of NFS service")
         self._write_to_read_only_export(new_pseudo_path, port, ip)
+        self._test_delete_cluster()
+
+    def test_update_export_ro_to_rw(self):
+        '''
+        Test update of export's access level from ro to rw
+        '''
+        self._test_create_cluster()
+        self._create_export(
+            export_id='1', create_fs=True,
+            extra_cmd=['--pseudo-path', self.pseudo_path, '--readonly'])
+        port, ip = self._get_port_ip_info()
+        self._write_to_read_only_export(self.pseudo_path, port, ip)
+        original_nfs_container_ids = self._get_nfs_container_ids()
+        export_block = self._get_export()
+        export_block['access_type'] = 'RW'
+        self.ctx.cluster.run(
+            args=['ceph', 'nfs', 'export', 'apply', self.cluster_id, '-i', '-'],
+            stdin=json.dumps(export_block))
+        self._check_nfs_cluster_status('running', 'NFS Ganesha cluster restart failed')
+        # updating export's access type should not trigger restart of NFS service
+        self.assertEqual(
+            original_nfs_container_ids.sort(), self._get_nfs_container_ids().sort(),
+            "expected NFS server daemons' container IDs to remain unchanged after export update")
+        self._test_mnt(self.pseudo_path, port, ip)
         self._test_delete_cluster()
 
     def test_update_export_with_invalid_values(self):

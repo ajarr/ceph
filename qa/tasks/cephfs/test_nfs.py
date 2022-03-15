@@ -81,18 +81,19 @@ class TestNFS(MgrTestCase):
         Check whether an event occured during the lifetime of the NFS service
         :param expected_event: event that was expected to occur
         '''
+        event_occurred = False
         # Wait few seconds for NFS daemons' status to be updated
-        wait_time = 10
-        while wait_time <= 120:
-            time.sleep(wait_time)
-            daemons_details = json.loads(self._fetch_nfs_daemons_details(enable_json=True))
-            log.info('daemons details %s', daemons_details)
-            for event in daemons_details[0]['events']:
-                log.info('daemon event %s', event)
-                if expected_event in event:
-                    return True
-            wait_time += 10
-        return False
+        with contextutil.safe_while(sleep=10, tries=12, _raise=False) as proceed:
+            while not event_occurred and proceed():
+                daemons_details = json.loads(
+                    self._fetch_nfs_daemons_details(enable_json=True))
+                log.info('daemons details %s', daemons_details)
+                for event in daemons_details[0]['events']:
+                    log.info('daemon event %s', event)
+                    if expected_event in event:
+                        event_occurred = True
+                        break
+        return event_occurred
 
     def _check_nfs_cluster_status(self, expected_status, fail_msg):
         '''

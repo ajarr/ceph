@@ -166,12 +166,29 @@ class TaskHandler:
     def __init__(self, module: Any) -> None:
         self.module = module
         self.log = module.log
+        self.connect()
 
         with self.lock:
             self.init_task_queue()
 
         self.thread = Thread(target=self.run)
         self.thread.start()
+
+    def reconnect(self) -> None:
+        self.shutdown()
+        self.connect()
+
+    def connect(self) -> None:
+        ctx_capsule = self.module.get_context()
+        self.rados = rados.Rados(context=ctx_capsule)
+        self.log.info("TaskHandler: connecting to RADOS")
+        self.rados.connect()
+        self.log.info("TaskHandler: RADOS client {} is connected".format(self.rados.get_addrs()))
+        self.rados.wait_for_latest_osdmap()
+
+    def shutdown(self) -> None:
+        if self.rados:
+            self.rados.shutdown()
 
     @property
     def default_pool_name(self) -> str:
@@ -200,7 +217,10 @@ class TaskHandler:
                     for sequence in sorted([sequence for sequence, task
                                             in self.tasks_by_sequence.items()
                                             if not task.retry_time or task.retry_time <= now]):
-                        self.execute_task(sequence)
+                        try:
+                            self.execute_task(sequence)
+                        except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                            self.reconnect()
 
                     self.condition.wait(5)
                     self.log.debug("TaskHandler: tick")
@@ -212,7 +232,7 @@ class TaskHandler:
     @contextmanager
     def open_ioctx(self, spec: PoolSpecT) -> Iterator[rados.Ioctx]:
         try:
-            with self.module.rados.open_ioctx(spec[0]) as ioctx:
+            with self.rados.open_ioctx(spec[0]) as ioctx:
                 ioctx.set_namespace(spec[1])
                 yield ioctx
         except rados.ObjectNotFound:
@@ -231,7 +251,7 @@ class TaskHandler:
     def init_task_queue(self) -> None:
         for pool_id, pool_name in get_rbd_pools(self.module).items():
             try:
-                with self.module.rados.open_ioctx2(int(pool_id)) as ioctx:
+                with self.rados.open_ioctx2(int(pool_id)) as ioctx:
                     self.load_task_queue(ioctx, pool_name)
 
                     try:
@@ -432,6 +452,8 @@ class TaskHandler:
             self.log.error("execute_task: {}".format(e))
             task.retry_message = "{}".format(e)
             self.update_progress(task, 0)
+            if isinstance(e, rados.ConnectionShutdown) or isinstance(e, rbd.ConnectionShutdown):
+                raise
 
         finally:
             task.in_progress = False

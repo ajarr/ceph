@@ -24,17 +24,46 @@ class TrashPurgeScheduleHandler:
         self.module = module
         self.log = module.log
         self.last_refresh_pools = datetime(1970, 1, 1)
+        self.connect()
 
         self.init_schedule_queue()
 
         self.thread = Thread(target=self.run)
         self.thread.start()
 
+    def reconnect(self) -> None:
+        with self.lock:
+            self.shutdown()
+            self.connect()
+            # Reload schedules stored before the client was blocklisted.
+            # This is to prevent `schedule add` command executed right after
+            # reconnect from overwriting stored schedules.
+            self.load_schedules()
+
+    def connect(self) -> None:
+        ctx_capsule = self.module.get_context()
+        self.rados = rados.Rados(context=ctx_capsule)
+        self.log.info("TrashPurgeScheduleHandler: connecting to RADOS")
+        self.rados.connect()
+        self.log.info("TrashPurgeScheduleHandler: RADOS client {} is connected".format(self.rados.get_addrs()))
+        self.rados.wait_for_latest_osdmap()
+
+    def shutdown(self) -> None:
+        if self.rados:
+            self.rados.shutdown()
+
     def run(self) -> None:
         try:
             self.log.info("TrashPurgeScheduleHandler: starting")
             while True:
-                refresh_delay = self.refresh_pools()
+                try:
+                    refresh_delay = self.refresh_pools()
+                except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                    self.log.info(
+                        "TrashPurgeScheduleHandler: trying to reconnect "
+                        "after client blocklisted")
+                    self.reconnect()
+                    continue
                 with self.lock:
                     (ns_spec, wait_time) = self.dequeue()
                     if not ns_spec:
@@ -51,7 +80,7 @@ class TrashPurgeScheduleHandler:
 
     def trash_purge(self, pool_id: str, namespace: str) -> None:
         try:
-            with self.module.rados.open_ioctx2(int(pool_id)) as ioctx:
+            with self.rados.open_ioctx2(int(pool_id)) as ioctx:
                 ioctx.set_namespace(namespace)
                 rbd.RBD().trash_purge(ioctx, datetime.now())
         except Exception as e:
@@ -78,7 +107,10 @@ class TrashPurgeScheduleHandler:
         self.log.debug("TrashPurgeScheduleHandler: refresh_pools")
 
         with self.lock:
-            self.load_schedules()
+            try:
+                self.load_schedules()
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                raise
             if not self.schedules:
                 self.log.debug("TrashPurgeScheduleHandler: no schedules")
                 self.pools = {}
@@ -92,8 +124,11 @@ class TrashPurgeScheduleHandler:
             if not self.schedules.intersects(
                     LevelSpec.from_pool_spec(pool_id, pool_name)):
                 continue
-            with self.module.rados.open_ioctx2(int(pool_id)) as ioctx:
-                self.load_pool(ioctx, pools)
+            try:
+                with self.rados.open_ioctx2(int(pool_id)) as ioctx:
+                    self.load_pool(ioctx, pools)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                raise
 
         with self.lock:
             self.refresh_queue(pools)
@@ -117,6 +152,8 @@ class TrashPurgeScheduleHandler:
         except Exception as e:
             self.log.error("exception when scanning pool {}: {}".format(
                 pool_name, e))
+            if isinstance(e, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                raise
 
         for namespace in pool_namespaces:
             pools[pool_id][namespace] = pool_name

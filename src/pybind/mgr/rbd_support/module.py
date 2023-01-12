@@ -32,11 +32,9 @@ class ImageSortBy(enum.Enum):
 FuncT = TypeVar('FuncT', bound=Callable)
 
 
-def with_latest_osdmap(func: FuncT) -> FuncT:
+def handle_cmd(func: FuncT) -> FuncT:
     @functools.wraps(func)
     def wrapper(self: 'Module', *args: Any, **kwargs: Any) -> Tuple[int, str, str]:
-        # ensure we have latest pools available
-        self.rados.wait_for_latest_osdmap()
         try:
             try:
                 return func(self, *args, **kwargs)
@@ -80,8 +78,17 @@ class Module(MgrModule):
         self.task = TaskHandler(self)
         self.trash_purge_schedule = TrashPurgeScheduleHandler(self)
 
+    def shutdown(self) -> None:
+        with self.mirror_snapshot_schedule.lock:
+            # calling shutdown after acquiring lock to prevent
+            # snapshot async request from being added during shutdown
+            self.mirror_snapshot_schedule.shutdown()
+        self.trash_purge_schedule.shutdown()
+        self.task.shutdown()
+        super(Module, self).shutdown()
+
     @CLIWriteCommand('rbd mirror snapshot schedule add')
-    @with_latest_osdmap
+    @handle_cmd
     def mirror_snapshot_schedule_add(self,
                                      level_spec: str,
                                      interval: str,
@@ -89,11 +96,15 @@ class Module(MgrModule):
         """
         Add rbd mirror snapshot schedule
         """
-        spec = LevelSpec.from_name(self, level_spec, namespace_validator, image_validator)
-        return self.mirror_snapshot_schedule.add_schedule(spec, interval, start_time)
+        try:
+            spec = LevelSpec.from_name(
+                self.mirror_snapshot_schedule, level_spec, namespace_validator, image_validator)
+            return self.mirror_snapshot_schedule.add_schedule(spec, interval, start_time)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd mirror snapshot schedule remove')
-    @with_latest_osdmap
+    @handle_cmd
     def mirror_snapshot_schedule_remove(self,
                                         level_spec: str,
                                         interval: Optional[str] = None,
@@ -101,31 +112,43 @@ class Module(MgrModule):
         """
         Remove rbd mirror snapshot schedule
         """
-        spec = LevelSpec.from_name(self, level_spec, namespace_validator, image_validator)
-        return self.mirror_snapshot_schedule.remove_schedule(spec, interval, start_time)
+        try:
+            spec = LevelSpec.from_name(
+                self.mirror_snapshot_schedule, level_spec, namespace_validator, image_validator)
+            return self.mirror_snapshot_schedule.remove_schedule(spec, interval, start_time)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIReadCommand('rbd mirror snapshot schedule list')
-    @with_latest_osdmap
+    @handle_cmd
     def mirror_snapshot_schedule_list(self,
                                       level_spec: str = '') -> Tuple[int, str, str]:
         """
         List rbd mirror snapshot schedule
         """
-        spec = LevelSpec.from_name(self, level_spec, namespace_validator, image_validator)
-        return self.mirror_snapshot_schedule.list(spec)
+        try:
+            spec = LevelSpec.from_name(
+                self.mirror_snapshot_schedule, level_spec, namespace_validator, image_validator)
+            return self.mirror_snapshot_schedule.list(spec)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIReadCommand('rbd mirror snapshot schedule status')
-    @with_latest_osdmap
+    @handle_cmd
     def mirror_snapshot_schedule_status(self,
                                         level_spec: str = '') -> Tuple[int, str, str]:
         """
         Show rbd mirror snapshot schedule status
         """
-        spec = LevelSpec.from_name(self, level_spec, namespace_validator, image_validator)
-        return self.mirror_snapshot_schedule.status(spec)
+        try:
+            spec = LevelSpec.from_name(
+                self.mirror_snapshot_schedule, level_spec, namespace_validator, image_validator)
+            return self.mirror_snapshot_schedule.status(spec)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIReadCommand('rbd perf image stats')
-    @with_latest_osdmap
+    @handle_cmd
     def perf_image_stats(self,
                          pool_spec: Optional[str] = None,
                          sort_by: Optional[ImageSortBy] = None) -> Tuple[int, str, str]:
@@ -137,7 +160,7 @@ class Module(MgrModule):
             return self.perf.get_perf_stats(pool_spec, sort_by_name)
 
     @CLIReadCommand('rbd perf image counters')
-    @with_latest_osdmap
+    @handle_cmd
     def perf_image_counters(self,
                             pool_spec: Optional[str] = None,
                             sort_by: Optional[ImageSortBy] = None) -> Tuple[int, str, str]:
@@ -149,79 +172,127 @@ class Module(MgrModule):
             return self.perf.get_perf_counters(pool_spec, sort_by_name)
 
     @CLIWriteCommand('rbd task add flatten')
-    @with_latest_osdmap
+    @handle_cmd
     def task_add_flatten(self, image_spec: str) -> Tuple[int, str, str]:
         """
         Flatten a cloned image asynchronously in the background
         """
         with self.task.lock:
-            return self.task.queue_flatten(image_spec)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.queue_flatten(image_spec)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd task add remove')
-    @with_latest_osdmap
+    @handle_cmd
     def task_add_remove(self, image_spec: str) -> Tuple[int, str, str]:
         """
         Remove an image asynchronously in the background
         """
         with self.task.lock:
-            return self.task.queue_remove(image_spec)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.queue_remove(image_spec)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd task add trash remove')
-    @with_latest_osdmap
+    @handle_cmd
     def task_add_trash_remove(self, image_id_spec: str) -> Tuple[int, str, str]:
         """
         Remove an image from the trash asynchronously in the background
         """
         with self.task.lock:
-            return self.task.queue_trash_remove(image_id_spec)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.queue_trash_remove(image_id_spec)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd task add migration execute')
-    @with_latest_osdmap
+    @handle_cmd
     def task_add_migration_execute(self, image_spec: str) -> Tuple[int, str, str]:
         """
         Execute an image migration asynchronously in the background
         """
         with self.task.lock:
-            return self.task.queue_migration_execute(image_spec)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.queue_migration_execute(image_spec)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd task add migration commit')
-    @with_latest_osdmap
+    @handle_cmd
     def task_add_migration_commit(self, image_spec: str) -> Tuple[int, str, str]:
         """
         Commit an executed migration asynchronously in the background
         """
         with self.task.lock:
-            return self.task.queue_migration_commit(image_spec)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.queue_migration_commit(image_spec)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd task add migration abort')
-    @with_latest_osdmap
+    @handle_cmd
     def task_add_migration_abort(self, image_spec: str) -> Tuple[int, str, str]:
         """
         Abort a prepared migration asynchronously in the background
         """
         with self.task.lock:
-            return self.task.queue_migration_abort(image_spec)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.queue_migration_abort(image_spec)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd task cancel')
-    @with_latest_osdmap
+    @handle_cmd
     def task_cancel(self, task_id: str) -> Tuple[int, str, str]:
         """
         Cancel a pending or running asynchronous task
         """
         with self.task.lock:
-            return self.task.task_cancel(task_id)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.task_cancel(task_id)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIReadCommand('rbd task list')
-    @with_latest_osdmap
+    @handle_cmd
     def task_list(self, task_id: Optional[str] = None) -> Tuple[int, str, str]:
         """
         List pending or running asynchronous tasks
         """
         with self.task.lock:
-            return self.task.task_list(task_id)
+            try:
+                self.task.rados.wait_for_latest_osdmap()
+                return self.task.task_list(task_id)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                self.log.info("TaskHandler: trying to reconnect after client blocklisted")
+                self.task.reconnect()
+                return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd trash purge schedule add')
-    @with_latest_osdmap
+    @handle_cmd
     def trash_purge_schedule_add(self,
                                  level_spec: str,
                                  interval: str,
@@ -229,11 +300,15 @@ class Module(MgrModule):
         """
         Add rbd trash purge schedule
         """
-        spec = LevelSpec.from_name(self, level_spec, allow_image_level=False)
-        return self.trash_purge_schedule.add_schedule(spec, interval, start_time)
+        try:
+            spec = LevelSpec.from_name(
+                self.trash_purge_schedule, level_spec, allow_image_level=False)
+            return self.trash_purge_schedule.add_schedule(spec, interval, start_time)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIWriteCommand('rbd trash purge schedule remove')
-    @with_latest_osdmap
+    @handle_cmd
     def trash_purge_schedule_remove(self,
                                     level_spec: str,
                                     interval: Optional[str] = None,
@@ -241,25 +316,37 @@ class Module(MgrModule):
         """
         Remove rbd trash purge schedule
         """
-        spec = LevelSpec.from_name(self, level_spec, allow_image_level=False)
-        return self.trash_purge_schedule.remove_schedule(spec, interval, start_time)
+        try:
+            spec = LevelSpec.from_name(
+                self.trash_purge_schedule, level_spec, allow_image_level=False)
+            return self.trash_purge_schedule.remove_schedule(spec, interval, start_time)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIReadCommand('rbd trash purge schedule list')
-    @with_latest_osdmap
+    @handle_cmd
     def trash_purge_schedule_list(self,
                                   level_spec: str = '') -> Tuple[int, str, str]:
         """
         List rbd trash purge schedule
         """
-        spec = LevelSpec.from_name(self, level_spec, allow_image_level=False)
-        return self.trash_purge_schedule.list(spec)
+        try:
+            spec = LevelSpec.from_name(
+                self.trash_purge_schedule, level_spec, allow_image_level=False)
+            return self.trash_purge_schedule.list(spec)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"
 
     @CLIReadCommand('rbd trash purge schedule status')
-    @with_latest_osdmap
+    @handle_cmd
     def trash_purge_schedule_status(self,
                                     level_spec: str = '') -> Tuple[int, str, str]:
         """
         Show rbd trash purge schedule status
         """
-        spec = LevelSpec.from_name(self, level_spec, allow_image_level=False)
-        return self.trash_purge_schedule.status(spec)
+        try:
+            spec = LevelSpec.from_name(
+                self.trash_purge_schedule, level_spec, allow_image_level=False)
+            return self.trash_purge_schedule.status(spec)
+        except (rbd.ConnectionShutdown, rados.ConnectionShutdown):
+            return -errno.EAGAIN, "", "try running the command again"

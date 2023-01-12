@@ -5,11 +5,9 @@ import rbd
 import re
 
 from dateutil.parser import parse
-from typing import cast, Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import cast, Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .common import get_rbd_pools
-if TYPE_CHECKING:
-    from .module import Module
 
 SCHEDULE_INTERVAL = "interval"
 SCHEDULE_START_TIME = "start_time"
@@ -97,7 +95,7 @@ class LevelSpec:
 
     @classmethod
     def from_name(cls,
-                  module: 'Module',
+                  handler: Any,
                   name: str,
                   namespace_validator: Optional[Callable] = None,
                   image_validator: Optional[Callable] = None,
@@ -120,16 +118,17 @@ class LevelSpec:
         if match.group(1):
             pool_name = match.group(1)
             try:
-                pool_id = module.rados.pool_lookup(pool_name)
+                handler.rados.wait_for_latest_osdmap()
+                pool_id = handler.rados.pool_lookup(pool_name)
                 if pool_id is None:
                     raise ValueError("pool {} does not exist".format(pool_name))
-                if pool_id not in get_rbd_pools(module):
+                if pool_id not in get_rbd_pools(handler.module):
                     raise ValueError("{} is not an RBD pool".format(pool_name))
                 pool_id = str(pool_id)
                 id += pool_id
                 if match.group(2) is not None or match.group(3):
                     id += "/"
-                    with module.rados.open_ioctx(pool_name) as ioctx:
+                    with handler.rados.open_ioctx(pool_name) as ioctx:
                         namespace = match.group(2) or ""
                         if namespace:
                             namespaces = rbd.RBD().namespace_list(ioctx)
@@ -186,13 +185,13 @@ class LevelSpec:
         if match.group(1):
             pool_id = match.group(1)
             try:
-                pool_name = handler.module.rados.pool_reverse_lookup(
+                pool_name = handler.rados.pool_reverse_lookup(
                     int(pool_id))
                 if pool_name is None:
                     raise ValueError("pool {} does not exist".format(pool_name))
                 name += pool_name + "/"
                 if match.group(2) is not None or match.group(3):
-                    with handler.module.rados.open_ioctx(pool_name) as ioctx:
+                    with handler.rados.open_ioctx(pool_name) as ioctx:
                         namespace = match.group(2) or ""
                         if namespace:
                             namespaces = rbd.RBD().namespace_list(ioctx)
@@ -415,13 +414,15 @@ class Schedules:
 
         for pool_id, pool_name in get_rbd_pools(self.handler.module).items():
             try:
-                with self.handler.module.rados.open_ioctx2(int(pool_id)) as ioctx:
+                with self.handler.rados.open_ioctx2(int(pool_id)) as ioctx:
                     self.load_from_pool(ioctx, namespace_validator,
                                         image_validator)
             except rados.Error as e:
                 self.handler.log.error(
                     "Failed to load schedules for pool {}: {}".format(
                         pool_name, e))
+                if isinstance(e, rados.ConnectionShutdown):
+                    raise
 
     def load_from_pool(self,
                        ioctx: rados.Ioctx,
@@ -486,7 +487,7 @@ class Schedules:
 
         pool_id = level_spec.get_pool_id()
         assert pool_id
-        with self.handler.module.rados.open_ioctx2(int(pool_id)) as ioctx:
+        with self.handler.rados.open_ioctx2(int(pool_id)) as ioctx:
             with rados.WriteOpCtx() as write_op:
                 if schedule:
                     ioctx.set_omap(write_op, (level_spec.id, ),

@@ -476,6 +476,7 @@ class PerfHandler:
                       pool_spec: Optional[str],
                       sort_by: str,
                       extract_data: ExtractDataFuncT) -> Tuple[int, str, str]:
+        self.module.rados.wait_for_latest_osdmap()
         self.log.debug("get_perf_{}s: pool_spec={}, sort_by={}".format(
             report, pool_spec, sort_by))
         self.scrub_expired_queries()

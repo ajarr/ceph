@@ -365,9 +365,6 @@ class MirrorSnapshotScheduleHandler:
         if self.rados:
             self.rados.shutdown()
 
-    def _cleanup(self) -> None:
-        self.create_snapshot_requests.wait_for_pending()
-
     def run(self) -> None:
         try:
             self.log.info("MirrorSnapshotScheduleHandler: starting")

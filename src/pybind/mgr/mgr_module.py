@@ -803,11 +803,7 @@ class MgrStandbyModule(ceph_module.BaseMgrStandbyModule, MgrModuleLoggingMixin):
         self._logger = self.getLogger()
 
     def __del__(self) -> None:
-        self._cleanup()
         self._unconfigure_logging()
-
-    def _cleanup(self) -> None:
-        pass
 
     @classmethod
     def _register_options(cls, module_name: str) -> None:

@@ -227,5 +227,15 @@ public:
     return v;
   }
 
+  auto get_clients_names() const
+  {
+    std::scoped_lock l(lock);
+    std::vector<std::string> v;
+    for (const auto& p : clients) {
+      v.push_back(p.first);
+    }
+    return v;
+  }
+
   // <<< (end of ActivePyModules cheeky call-throughs)
 };

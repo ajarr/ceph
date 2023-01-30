@@ -234,6 +234,7 @@ void MgrStandby::send_beacon()
   for (const auto& client : clients) {
     dout(15) << "noting RADOS client for blocklist: " << client << dendl;
   }
+  auto clients_names = py_module_registry.get_clients_names();
 
   // Whether I think I am available (request MgrMonitor to set me
   // as available in the map)
@@ -255,6 +256,7 @@ void MgrStandby::send_beacon()
 				 std::move(module_info),
 				 std::move(metadata),
                                  std::move(clients),
+				 std::move(clients_names),
 				 CEPH_FEATURES_ALL);
 
   if (available) {

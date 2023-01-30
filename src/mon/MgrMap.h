@@ -239,6 +239,7 @@ public:
   uint64_t active_mgr_features = 0;
 
   std::vector<entity_addrvec_t> clients; // for blocklist
+  std::vector<std::string> clients_names;
 
   std::map<uint64_t, StandbyInfo> standbys;
 
@@ -394,7 +395,7 @@ public:
       ENCODE_FINISH(bl);
       return;
     }
-    ENCODE_START(11, 6, bl);
+    ENCODE_START(12, 6, bl);
     encode(epoch, bl);
     encode(active_addrs, bl, features);
     encode(active_gid, bl);
@@ -409,13 +410,14 @@ public:
     encode(active_mgr_features, bl);
     encode(last_failure_osd_epoch, bl);
     encode(clients, bl, features);
+    encode(clients_names, bl, features);
     ENCODE_FINISH(bl);
     return;
   }
 
   void decode(ceph::buffer::list::const_iterator& p)
   {
-    DECODE_START(11, p);
+    DECODE_START(12, p);
     decode(epoch, p);
     decode(active_addrs, p);
     decode(active_gid, p);
@@ -462,6 +464,9 @@ public:
     }
     if (struct_v >= 11) {
       decode(clients, p);
+    }
+    if (struct_v >= 12) {
+      decode(clients_names, p);
     }
     DECODE_FINISH(p);
   }
@@ -516,8 +521,13 @@ public:
     }
     f->dump_int("last_failure_osd_epoch", last_failure_osd_epoch);
     f->open_array_section("active_clients");
-    for (const auto &c : clients) {
-      f->dump_object("client", c);
+    auto c = clients.begin();
+    auto cn =clients_names.begin();
+    for (; c!=clients.end() && cn!=clients_names.end(); ++c, ++cn) {
+      f->open_object_section("client");
+      f->dump_string("name", *cn);
+      c->dump(f);
+      f->close_section();
     }
     f->close_section();
     f->close_section();

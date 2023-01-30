@@ -588,6 +588,13 @@ bool MgrMonitor::prepare_beacon(MonOpRequestRef op)
       pending_map.clients = clients;
       updated = true;
     }
+    const auto& clients_names = m->get_clients_names();
+    if (pending_map.clients_names != clients_names) {
+      dout(4) << "active's RADOS clients names " << clients_names
+	      << " (was " << pending_map.clients_names << ")" << dendl;
+      pending_map.clients_names = clients_names;
+      updated = true;
+    }
   } else if (pending_map.active_gid == 0) {
     // There is no currently active daemon, select this one.
     if (pending_map.standbys.count(m->get_gid())) {
@@ -924,6 +931,7 @@ void MgrMonitor::drop_active()
   pending_map.active_addrs = entity_addrvec_t();
   pending_map.services.clear();
   pending_map.clients.clear();
+  pending_map.clients_names.clear();
   pending_map.last_failure_osd_epoch = blocklist_epoch;
 
   // So that when new active mgr subscribes to mgrdigest, it will

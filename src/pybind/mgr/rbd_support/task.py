@@ -184,11 +184,15 @@ class TaskHandler:
         self.log.info("TaskHandler: connecting to RADOS")
         self.rados.connect()
         self.log.info("TaskHandler: RADOS client {} is connected".format(self.rados.get_addrs()))
+        self.rados_addrs = self.rados.get_addrs()
+        self.log.info("TaskHandler: RADOS client {} is connected".format(self.rados_addrs))
+        self.module._ceph_register_client(self.rados_addrs, "task")
         self.rados.wait_for_latest_osdmap()
 
     def shutdown(self) -> None:
         if self.rados:
             self.rados.shutdown()
+            self.module._ceph_unregister_client(self.rados_addrs, "task")
 
     @property
     def default_pool_name(self) -> str:

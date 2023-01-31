@@ -46,11 +46,17 @@ class TrashPurgeScheduleHandler:
         self.log.info("TrashPurgeScheduleHandler: connecting to RADOS")
         self.rados.connect()
         self.log.info("TrashPurgeScheduleHandler: RADOS client {} is connected".format(self.rados.get_addrs()))
+        self.rados_addrs = self.rados.get_addrs()
+        self.log.info("TrashPurgeScheduleHandler: RADOS client {} is connected".format(self.rados_addrs))
+        self.module._ceph_register_client(
+            self.rados_addrs, "trash_purge_schedule")
         self.rados.wait_for_latest_osdmap()
 
     def shutdown(self) -> None:
         if self.rados:
             self.rados.shutdown()
+            self.module._ceph_unregister_client(
+                self.rados_addrs, "trash_purge_schedule")
 
     def run(self) -> None:
         try:

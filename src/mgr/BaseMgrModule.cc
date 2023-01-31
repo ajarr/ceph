@@ -1389,11 +1389,17 @@ static PyObject*
 ceph_register_client(BaseMgrModule *self, PyObject *args)
 {
   char *addrs = nullptr;
-  if (!PyArg_ParseTuple(args, "s:ceph_register_client", &addrs)) {
+  char *suffix = nullptr;
+  std::string client_name = self->this_module->get_name();
+  if (!PyArg_ParseTuple(args, "s|s:ceph_register_client", &addrs, &suffix)) {
     return nullptr;
   }
+  if (suffix != nullptr) {
+    client_name.append(".").append(suffix);
+  }
+
   without_gil([&] {
-    self->py_modules->register_client(self->this_module->get_name(), addrs);
+    self->py_modules->register_client(client_name, addrs);
   });
   Py_RETURN_NONE;
 }
@@ -1402,11 +1408,17 @@ static PyObject*
 ceph_unregister_client(BaseMgrModule *self, PyObject *args)
 {
   char *addrs = nullptr;
-  if (!PyArg_ParseTuple(args, "s:ceph_unregister_client", &addrs)) {
+  char *suffix = nullptr;
+  std::string client_name = self->this_module->get_name();
+  if (!PyArg_ParseTuple(args, "s|s:ceph_unregister_client", &addrs, &suffix)) {
     return nullptr;
   }
+  if (suffix != nullptr) {
+    client_name.append(".").append(suffix);
+  }
+
   without_gil([&] {
-    self->py_modules->unregister_client(self->this_module->get_name(), addrs);
+    self->py_modules->unregister_client(client_name, addrs);
   });
   Py_RETURN_NONE;
 }

@@ -1358,6 +1358,52 @@ test_mirror_snapshot_schedule() {
     ceph osd pool rm rbd2 rbd2 --yes-i-really-really-mean-it
 }
 
+test_mirror_snapshot_schedule_recovery() {
+    echo "testing recovery of mirror snapshot scheduler after its client is blocklisted..."
+    remove_images
+    ceph osd pool create rbd3 8
+    rbd pool init rbd3
+    rbd namespace create rbd3/ns1
+
+    rbd mirror pool enable rbd3 image
+    rbd mirror pool enable rbd3/ns1 image
+    rbd mirror pool peer add rbd3 cluster1
+
+    rbd create $RBD_CREATE_ARGS -s 1 rbd3/ns1/test1
+    rbd mirror image enable rbd3/ns1/test1 snapshot
+    test "$(rbd mirror image status rbd3/ns1/test1 |
+        grep -c mirror.primary)" = '1'
+
+    rbd mirror snapshot schedule add -p rbd3/ns1 --image test1 1m
+    test "$(rbd mirror snapshot schedule ls -p rbd3/ns1 --image test1)" = 'every 1m'
+
+    # Fetch and blocklist the mirror_snapshot_schedule handler's RADOS client
+    CLIENT_ADDR=$(ceph mgr dump | jq .always_on_modules.active_clients[] |
+	jq 'select(.name == "rbd_support.mirror_snapshot_schedule")' |
+	jq -r '[.addrvec[0].addr, "/", .addrvec[0].nonce|tostring] | add')
+    ceph osd blocklist add $CLIENT_ADDR
+    ceph osd blocklist ls | grep $CLIENT_ADDR
+
+    # Check that you can add a mirror snapshot schedule after a few retries
+    for i in `seq 12`; do
+        rbd mirror snapshot schedule add -p rbd3/ns1 --image test1 2m && break
+	sleep 10
+    done
+
+    rbd mirror snapshot schedule ls -p rbd3/ns1 --image test1 | grep 'every 2m'
+    # Verify that the schedule present before client blocklisting is preserved
+    rbd mirror snapshot schedule ls -p rbd3/ns1 --image test1 | grep 'every 1m'
+
+    rbd mirror snapshot schedule rm -p rbd3/ns1 --image test1 2m
+    rbd mirror snapshot schedule rm -p rbd3/ns1 --image test1 1m
+    rbd mirror snapshot schedule ls -p rbd3/ns1 --image test1 | expect_fail grep 'every 2m'
+    rbd mirror snapshot schedule ls -p rbd3/ns1 --image test1 | expect_fail grep 'every 1m'
+
+    rbd snap purge rbd3/ns1/test1
+    rbd rm rbd3/ns1/test1
+    ceph osd pool rm rbd3 rbd3 --yes-i-really-really-mean-it
+}
+
 test_perf_image_iostat() {
     echo "testing perf image iostat..."
     remove_images
@@ -1530,6 +1576,7 @@ test_thick_provision
 test_namespace
 test_trash_purge_schedule
 test_mirror_snapshot_schedule
+test_mirror_snapshot_schedule_recovery
 test_perf_image_iostat
 test_mirror_pool_peer_bootstrap_create
 test_tasks_removed_pool

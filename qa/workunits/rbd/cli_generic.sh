@@ -1246,6 +1246,41 @@ test_trash_purge_schedule() {
     ceph osd pool rm rbd2 rbd2 --yes-i-really-really-mean-it
 }
 
+test_trash_purge_schedule_recovery() {
+    remove_images
+    ceph osd pool create rbd3 8
+    rbd pool init rbd3
+    rbd namespace create rbd3/ns1
+
+    rbd trash purge schedule add -p rbd3/ns1 2d
+    rbd trash purge schedule ls -p rbd3 -R | grep 'rbd3 *ns1 *every 2d'
+
+    # Fetch and blocklist the trash_purge_schedule handler's RADOS client
+    CLIENT_ADDR=$(ceph mgr dump | jq .always_on_modules.active_clients[] |
+	jq 'select(.name == "rbd_support.trash_purge_schedule")' |
+	jq -r '[.addrvec[0].addr, "/", .addrvec[0].nonce|tostring] | add')
+    ceph osd blocklist add $CLIENT_ADDR
+    ceph osd blocklist ls | grep $CLIENT_ADDR
+
+    # Check that you can add a trash purge schedule after a few retries
+    for i in `seq 12`; do
+        rbd trash purge schedule add -p rbd3 10m && break
+	sleep 10
+    done
+
+    rbd trash purge schedule ls -p rbd3 -R | grep 'every 10m'
+    # Verify that the schedule present before client blocklisting is preserved
+    rbd trash purge schedule ls -p rbd3 -R | grep 'rbd3 *ns1 *every 2d'
+
+    rbd trash purge schedule remove -p rbd3 10m
+    rbd trash purge schedule remove -p rbd3/ns1 2d
+    rbd trash purge schedule ls -p rbd3 -R | expect_fail grep 'every 10m'
+    rbd trash purge schedule ls -p rbd3 -R | expect_fail grep 'rbd3 *ns1 *every 2d'
+
+    ceph osd pool rm rbd3 rbd3 --yes-i-really-really-mean-it
+
+}
+
 test_mirror_snapshot_schedule() {
     echo "testing mirror snapshot schedule..."
     remove_images
@@ -1575,6 +1610,7 @@ test_clone_v2
 test_thick_provision
 test_namespace
 test_trash_purge_schedule
+test_trash_purge_schedule_recovery
 test_mirror_snapshot_schedule
 test_mirror_snapshot_schedule_recovery
 test_perf_image_iostat

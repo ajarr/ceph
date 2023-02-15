@@ -46,8 +46,11 @@ class TrashPurgeScheduleHandler:
                     self.enqueue(datetime.now(), pool_id, namespace)
 
         except Exception as ex:
-            self.log.fatal("Fatal runtime error: {}\n{}".format(
-                ex, traceback.format_exc()))
+            if isinstance(ex, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                self.log.debug("TrashPurgeScheduleHandler: caught blocklist error")
+            else:
+                self.log.fatal("Fatal runtime error: {}\n{}".format(
+                    ex, traceback.format_exc()))
 
     def trash_purge(self, pool_id: str, namespace: str) -> None:
         try:
@@ -57,6 +60,8 @@ class TrashPurgeScheduleHandler:
         except Exception as e:
             self.log.error("exception when purging {}/{}: {}".format(
                 pool_id, namespace, e))
+            if isinstance(e, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                raise
 
     def init_schedule_queue(self) -> None:
         self.queue: Dict[str, List[Tuple[str, str]]] = {}
@@ -117,6 +122,8 @@ class TrashPurgeScheduleHandler:
         except Exception as e:
             self.log.error("exception when scanning pool {}: {}".format(
                 pool_name, e))
+            if isinstance(e, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                raise
 
         for namespace in pool_namespaces:
             pools[pool_id][namespace] = pool_name

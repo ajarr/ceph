@@ -35,6 +35,8 @@ FuncT = TypeVar('FuncT', bound=Callable)
 def with_latest_osdmap(func: FuncT) -> FuncT:
     @functools.wraps(func)
     def wrapper(self: 'Module', *args: Any, **kwargs: Any) -> Tuple[int, str, str]:
+        if self.client_reconnecting:
+            return -errno.EAGAIN, "", "try running command after sometime"
         # ensure we have latest pools available
         self.rados.wait_for_latest_osdmap()
         try:
@@ -46,6 +48,8 @@ def with_latest_osdmap(func: FuncT) -> FuncT:
                 # log the full traceback but don't send it to the CLI user
                 self.log.exception("Fatal runtime error: ")
                 raise
+        except (rados.ConnectionShutdown, rbd.ConnectionShutdown) as ex:
+            return -errno.EAGAIN, "", str(ex)
         except rados.Error as ex:
             return -ex.errno, "", str(ex)
         except rbd.OSError as ex:
@@ -74,11 +78,23 @@ class Module(MgrModule):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super(Module, self).__init__(*args, **kwargs)
+        self.setup()
+
+    def setup(self) -> None:
+        self.log.debug("rbd_support module: starting setup")
         self.rados.wait_for_latest_osdmap()
         self.mirror_snapshot_schedule = MirrorSnapshotScheduleHandler(self)
         self.perf = PerfHandler(self)
         self.task = TaskHandler(self)
         self.trash_purge_schedule = TrashPurgeScheduleHandler(self)
+        self.client_reconnecting = False
+
+    def reload(self) -> None:
+        self.log.debug("rbd_support module: shutting down rados client")
+        self.shutdown()
+        self._rados = None
+        self.client_reconnecting = True
+        self.setup()
 
     @CLIWriteCommand('rbd mirror snapshot schedule add')
     @with_latest_osdmap

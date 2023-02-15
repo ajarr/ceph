@@ -288,6 +288,7 @@ class CreateSnapshotRequests:
 
         with self.lock:
             self.pending.remove(image_spec)
+            self.condition.notify()
             if not self.queue:
                 return
             image_spec = self.queue.pop(0)
@@ -343,7 +344,9 @@ class MirrorSnapshotScheduleHandler:
         self.thread.start()
 
     def _cleanup(self) -> None:
+        self.log.debug("MirrorSnapshotScheduleHandler: create_snapshot_request.wait_for_pending started")
         self.create_snapshot_requests.wait_for_pending()
+        self.log.debug("MirrorSnapshotScheduleHandler: create_snapshot_request.wait_for_pending ended")
 
     def run(self) -> None:
         try:
@@ -361,8 +364,18 @@ class MirrorSnapshotScheduleHandler:
                     self.enqueue(datetime.now(), pool_id, namespace, image_id)
 
         except Exception as ex:
-            self.log.fatal("Fatal runtime error: {}\n{}".format(
-                ex, traceback.format_exc()))
+            if isinstance(ex, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                try:
+                    self.log.debug("MirrorSnapshotScheduleHandler: caught blocklist error")
+                    self._cleanup()
+                    self.log.debug("MirrorSnapshotScheduleHandler: starting module reload")
+                    self.module.reload()
+                except Exception as ex:
+                    self.log.fatal("Module reload failed error: {}\n{}".format(
+                        ex, traceback.format_exc()))
+            else:
+                self.log.fatal("Fatal runtime error: {}\n{}".format(
+                    ex, traceback.format_exc()))
 
     def init_schedule_queue(self) -> None:
         # schedule_time => image_spec
@@ -385,7 +398,10 @@ class MirrorSnapshotScheduleHandler:
         self.log.debug("MirrorSnapshotScheduleHandler: refresh_images")
 
         with self.lock:
-            self.load_schedules()
+            try:
+                self.load_schedules()
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                raise
             if not self.schedules:
                 self.log.debug("MirrorSnapshotScheduleHandler: no schedules")
                 self.images = {}
@@ -399,8 +415,11 @@ class MirrorSnapshotScheduleHandler:
             if not self.schedules.intersects(
                     LevelSpec.from_pool_spec(pool_id, pool_name)):
                 continue
-            with self.module.rados.open_ioctx2(int(pool_id)) as ioctx:
-                self.load_pool_images(ioctx, images)
+            try:
+                with self.module.rados.open_ioctx2(int(pool_id)) as ioctx:
+                    self.load_pool_images(ioctx, images)
+            except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
+                raise
 
         with self.lock:
             self.refresh_queue(images)
@@ -454,6 +473,8 @@ class MirrorSnapshotScheduleHandler:
             self.log.error(
                 "load_pool_images: exception when scanning pool {}: {}".format(
                     pool_name, e))
+            if isinstance(e, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                raise
 
     def rebuild_queue(self) -> None:
         now = datetime.now()

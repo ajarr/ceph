@@ -136,8 +136,11 @@ class PerfHandler:
                 self.log.debug("PerfHandler: tick")
 
         except Exception as ex:
-            self.log.fatal("Fatal runtime error: {}\n{}".format(
-                ex, traceback.format_exc()))
+            if isinstance(ex, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                self.log.debug("PerfHandler: caught blocklist error")
+            else:
+                self.log.fatal("Fatal runtime error: {}\n{}".format(
+                    ex, traceback.format_exc()))
 
     def merge_raw_osd_perf_counters(self,
                                     pool_key: PoolKeyT,

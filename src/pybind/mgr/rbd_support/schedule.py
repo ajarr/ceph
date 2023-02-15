@@ -422,6 +422,8 @@ class Schedules:
                 self.handler.log.error(
                     "Failed to load schedules for pool {}: {}".format(
                         pool_name, e))
+                if isinstance(e, rados.ConnectionShutdown):
+                    raise
 
     def load_from_pool(self,
                        ioctx: rados.Ioctx,

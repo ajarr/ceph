@@ -206,6 +206,8 @@ class TaskHandler:
                     self.log.debug("TaskHandler: tick")
 
         except Exception as ex:
+            if isinstance(ex, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                self.log.debug("TaskHandler: caught blocklist error")
             self.log.fatal("Fatal runtime error: {}\n{}".format(
                 ex, traceback.format_exc()))
 
@@ -432,6 +434,8 @@ class TaskHandler:
             self.log.error("execute_task: {}".format(e))
             task.retry_message = "{}".format(e)
             self.update_progress(task, 0)
+            if isinstance(e, (rados.ConnectionShutdown, rbd.ConnectionShutdown)):
+                raise
 
         finally:
             task.in_progress = False

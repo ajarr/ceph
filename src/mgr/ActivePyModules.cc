@@ -1516,8 +1516,9 @@ void ActivePyModules::register_client(std::string_view name, std::string addrs)
   entity_addrvec_t addrv;
   addrv.parse(addrs.data());
 
-  dout(7) << "registering msgr client handle " << addrv << dendl;
-  py_module_registry.register_client(name, std::move(addrv));
+  dout(7) << "registering msgr client handle " << name << " : " << addrv << dendl;
+  py_module_registry.register_client(name, addrv);
+  cluster_state.wait_for_client_in_mgrmap(name, std::move(addrv));
 }
 
 void ActivePyModules::unregister_client(std::string_view name, std::string addrs)

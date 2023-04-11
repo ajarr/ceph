@@ -57,6 +57,16 @@ void ClusterState::set_mgr_map(MgrMap const &new_mgrmap)
 {
   std::lock_guard l(lock);
   mgr_map = new_mgrmap;
+  auto p = waiting_for_clients_in_mgrmap.begin();
+  while (p != waiting_for_clients_in_mgrmap.end())
+  {
+    if ((*p)->check_client_in_mgrmap(mgr_map)) {
+      (*p)->complete(0);
+      waiting_for_clients_in_mgrmap.erase(p++);
+    } else {
+      ++p;
+    }
+  }
 }
 
 void ClusterState::set_service_map(ServiceMap const &new_service_map)

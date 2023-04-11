@@ -389,6 +389,9 @@ void Mgr::init()
     addrv.parse(ident);
     ident = (char*)realloc(ident, 0);
     py_module_registry->register_client("libcephsqlite", addrv);
+    lock.unlock();
+    cluster_state.wait_for_client_in_mgrmap("libcephsqlite", std::move(addrv));
+    lock.lock();
   }
 #endif
 

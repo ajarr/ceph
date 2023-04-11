@@ -17,6 +17,7 @@
 #include "mds/FSMap.h"
 #include "mon/MgrMap.h"
 #include "common/ceph_mutex.h"
+#include "common/Cond.h"
 
 #include "osdc/Objecter.h"
 #include "mon/MonClient.h"
@@ -26,6 +27,52 @@
 class MMgrDigest;
 class MMonMgrReport;
 class MPGStats;
+
+/**
+ * Context providing a simple wait() mechanism to wait for completion
+ *
+ * The context will not be deleted as part of complete and must live
+ * until wait() returns.
+ */
+class C_ClientInMgrMapCond : public Context {
+  mutable ceph::mutex lock = ceph::make_mutex("C_ClientInMgrMapCond");
+  ceph::condition_variable cond;     ///< Cond to signal
+  std::string_view name;
+  entity_addrvec_t client_addr;
+  bool done = false; ///< true after finish() has been called
+  int rval = 0;
+public:
+  C_ClientInMgrMapCond(std::string_view name_, entity_addrvec_t client_addr_) :
+    name(name_), client_addr(client_addr_) {}
+
+  void finish(int r) override { complete(r); }
+
+  bool check_client_in_mgrmap(const MgrMap& mgrmap) {
+    auto itp = mgrmap.clients.equal_range(std::string(name));
+    for (auto it = itp.first; it != itp.second; ++it) {
+      if (it->second == client_addr) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// We overload complete in order to not delete the context
+  void complete(int r) override {
+    std::lock_guard l(lock);
+    done = true;
+    rval = r;
+    cond.notify_all();
+  }
+
+  /// Returns rval once the Context is called
+  int wait() {
+    std::unique_lock l{lock};
+    cond.wait(l, [this] { return done;});
+    return rval;
+  }
+
+};
 
 
 /**
@@ -52,8 +99,17 @@ protected:
 
   class ClusterSocketHook *asok_hook;
 
+  std::list<C_ClientInMgrMapCond*> waiting_for_clients_in_mgrmap;
+
 public:
 
+  void wait_for_client_in_mgrmap(std::string_view name, entity_addrvec_t client_addr) {
+    auto cond = C_ClientInMgrMapCond(std::string_view(name), std::move(client_addr));
+    std::unique_lock l(lock);
+    waiting_for_clients_in_mgrmap.push_back(&cond);
+    l.unlock();
+    cond.wait();
+  }
   void load_digest(MMgrDigest *m);
   void ingest_pgstats(ceph::ref_t<MPGStats> stats);
 

@@ -16,6 +16,7 @@ tasks:
 - cephadm.shell:
     host.a:
       - ceph mgr module enable rgw
+      - while ! ceph rgw realm tokens; do sleep 5; done
 - rgw_module.apply:
     specs:
       - rgw_realm: myrealm1

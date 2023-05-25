@@ -1,0 +1,21 @@
+overrides:
+  install:
+    ceph:
+      extra_packages:
+        - rbd-nbd
+      extra_system_packages:
+        - pv
+tasks:
+- workunit:
+    clients:
+      cluster1.client.mirror:
+        - rbd/compare_mirror_image_alternate_primary.sh
+    env:
+      CEPH_ARGS: ''
+      MIRROR_POOL_MODE: 'image'
+      MIRROR_IMAGE_MODE: 'snapshot'
+      RBD_DEVICE_TYPE: 'nbd'
+      RBD_MIRROR_INSTANCES: '1'
+      RBD_MIRROR_USE_EXISTING_CLUSTER: '1'
+      RBD_IMAGE_FEATURES: 'layering,exclusive-lock,object-map,fast-diff'
+    timeout: 3h

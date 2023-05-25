@@ -99,6 +99,7 @@ MIRROR_POOL_MODE=${MIRROR_POOL_MODE:-pool}
 if [ "${RBD_MIRROR_MODE}" = "snapshot" ]; then
   MIRROR_POOL_MODE=image
 fi
+RBD_DEV_TYPE=${RBD_DEV_TYPE:-krbd}
 
 export CEPH_ARGS="--id ${CEPH_ID}"
 
@@ -1514,6 +1515,34 @@ wait_for_image_in_omap()
     wait_for_omap_keys ${cluster} ${pool} rbd_mirroring status_global
     wait_for_omap_keys ${cluster} ${pool} rbd_mirroring image_
     wait_for_omap_keys ${cluster} ${pool} rbd_mirror_leader image_map
+}
+
+map()
+{
+    local cluster=$1
+    local pool=$2
+    local image=$3
+    local snap=$4
+
+    if [[ -n $snap ]]; then
+      snap="@$snap"
+    fi
+
+    sudo rbd --cluster $cluster device map -t ${RBD_DEVICE_TYPE} $pool/$image$snap
+}
+
+unmap()
+{
+    local cluster=$1
+    local pool=$2
+    local image=$3
+    local snap=$4
+
+    if [[ -n $snap ]]; then
+      snap="@$snap"
+    fi
+
+    sudo rbd --cluster $cluster device unmap -t ${RBD_DEVICE_TYPE} $pool/$image$snap
 }
 
 #

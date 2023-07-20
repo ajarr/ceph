@@ -207,6 +207,19 @@ void ManagedLock<I>::reacquire_lock(Context *on_reacquired) {
   {
     std::lock_guard locker{m_lock};
 
+    uint64_t watch_handle = m_watcher->get_watch_handle();
+    if (watch_handle == 0 && m_watcher->is_blocklisted() &&
+        m_state == STATE_WAITING_FOR_LOCK) {
+      Action active_action = get_active_action();
+      ceph_assert(active_action == ACTION_TRY_LOCK ||
+		  active_action == ACTION_ACQUIRE_LOCK);
+      complete_active_action(STATE_UNLOCKED, -EBLOCKLISTED);
+      if (on_reacquired != nullptr) {
+	on_reacquired->complete(-EBLOCKLISTED);
+      }
+      return;
+    }
+
     if (m_state == STATE_WAITING_FOR_REGISTER) {
       // restart the acquire lock process now that watch is valid
       ldout(m_cct, 10) << "woke up waiting (re)acquire" << dendl;

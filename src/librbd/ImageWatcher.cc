@@ -628,6 +628,14 @@ void ImageWatcher<I>::handle_request_lock(int r) {
     return;
   }
 
+  // kick-start ExclusiveLock state machine to detect client blocklisting
+  if (m_watch_blocklisted) {
+    lderr(m_image_ctx.cct) << this << " make lock detect client blocklisting"
+                           << dendl;
+    m_image_ctx.exclusive_lock->handle_peer_notification(0);
+    return;
+  }
+
   if (r == -ETIMEDOUT) {
     ldout(m_image_ctx.cct, 5) << this << " timed out requesting lock: retrying"
                               << dendl;
@@ -1515,6 +1523,10 @@ template <typename I>
 void ImageWatcher<I>::handle_rewatch_complete(int r) {
   CephContext *cct = m_image_ctx.cct;
   ldout(cct, 10) << this << " " << __func__ << ": r=" << r << dendl;
+
+  if (r == -EBLOCKLISTED) {
+    return;
+  }
 
   {
     std::shared_lock owner_locker{m_image_ctx.owner_lock};

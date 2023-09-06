@@ -1,0 +1,5 @@
+overrides:
+  ceph:
+    conf:
+      mgr:
+        mon warn on pool no app: false

@@ -5,7 +5,7 @@ POOL=rbd2
 IMAGE_PREFIX=image
 MNT_DIR_PREFIX=mnt
 IMAGES=20
-RUN_TIME=1800
+RUN_TIME=180
 
 ceph osd pool create ${POOL}
 rbd pool init ${POOL}
@@ -33,7 +33,7 @@ done
 for ((i=1;i<=${IMAGES};i++)); do
     fio --name=fiotest --filename=${MNTPATHS[$i]}/test --rw=randrw --bs=4K \
         --direct=1 --ioengine=libaio --size=800M --iodepth=2 \
-        --runtime=${RUN_TIME} --time_based &> /dev/null &
+        --runtime=${RUN_TIME} --time_based
 done
 
 CURRENT_TIME=$(date +%s)

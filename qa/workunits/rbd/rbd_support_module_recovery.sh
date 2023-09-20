@@ -49,6 +49,7 @@ while [[ ${CURRENT_TIME} -le ${END_TIME} ]]; do
 	sleep 10
         # Confirm rbd_support module's client is blocklisted
 	ceph osd blocklist ls | grep -q ${CLIENT_ADDR}
+	sudo pgrep -x fio || true
         PREV_CLIENT=${CLIENT_ADDR}
     fi
     CURRENT_TIME=$(date +%s)

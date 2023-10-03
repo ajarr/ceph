@@ -35,7 +35,8 @@ END_TIME=$((CURRENT_TIME + RUN_TIME))
 PREV_CLIENT_ADDR=""
 CLIENT_ADDR=""
 while [[ ${CURRENT_TIME} -le ${END_TIME} ]]; do
-    if [[ "${CLIENT_ADDR}" != "${PREV_CLIENT_ADDR}" ]]; then
+    if [[ ! -z "${CLIENT_ADDR}" ]] &&
+       [[ "${CLIENT_ADDR}" != "${PREV_CLIENT_ADDR}" ]]; then
             ceph osd blocklist add ${CLIENT_ADDR}
             # Confirm rbd_support module's client is blocklisted
             ceph osd blocklist ls | grep -q ${CLIENT_ADDR}

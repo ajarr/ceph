@@ -3,6 +3,7 @@
 set -ex
 
 IMAGE=image
+RBD_MIRROR_MODE=snapshot
 MOUNT=/mnt/test
 WORKLOAD_TIMEOUT=5m
 
@@ -52,8 +53,7 @@ start_mirrors ${CLUSTER1}
 start_mirrors ${CLUSTER2}
 
 #initial setup
-create_image ${CLUSTER1} ${POOL} ${IMAGE} 10G
-enable_mirror ${CLUSTER1} ${POOL} ${IMAGE}
+create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMAGE} ${RBD_MIRROR_MODE} 10G
 
 BDEV=$(map ${CLUSTER1} ${POOL} ${IMAGE})
 sudo mkfs.ext4 ${BDEV}

@@ -1525,10 +1525,10 @@ map()
     local snap=$4
 
     if [[ -n $snap ]]; then
-      snap="@$snap"
+      sudo rbd --cluster $cluster device map -t ${RBD_DEVICE_TYPE} --snap-id $snap $pool/$image
+    else
+      sudo rbd --cluster $cluster device map -t ${RBD_DEVICE_TYPE} $pool/$image
     fi
-
-    sudo rbd --cluster $cluster device map -t ${RBD_DEVICE_TYPE} $pool/$image$snap
 }
 
 unmap()
@@ -1539,10 +1539,10 @@ unmap()
     local snap=$4
 
     if [[ -n $snap ]]; then
-      snap="@$snap"
+      sudo rbd --cluster $cluster device unmap -t ${RBD_DEVICE_TYPE} --snap-id $snap $pool/$image
+    else
+      sudo rbd --cluster $cluster device unmap -t ${RBD_DEVICE_TYPE} $pool/$image
     fi
-
-    sudo rbd --cluster $cluster device unmap -t ${RBD_DEVICE_TYPE} $pool/$image$snap
 }
 
 #

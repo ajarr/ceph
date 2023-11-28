@@ -54,19 +54,19 @@ compare_images() {
     unmap ${CLUSTER1} ${POOL} ${IMAGE}${j}
     demote_image ${CLUSTER1} ${POOL} ${IMAGE}${j}
 
-    DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMAGE}${j} | tail -n 1 | grep mirror\.primary | grep demoted | awk '{print $2}')
-    BDEV=$(map ${CLUSTER1} ${POOL} ${IMAGE}${j} ${DEMOTE})
+    DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMAGE}${j} | tail -n 1 | grep mirror\.primary | grep demoted | awk '{print $1}')
+    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} --snap-id ${DEMOTE} ${POOL}/${IMAGE}${j})
     DEMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-    unmap ${CLUSTER1} ${POOL} ${IMAGE}${j} ${DEMOTE}
-
+    sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} --snap-id ${DEMOTE} ${POOL}/${IMAGE}${j}
     wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMAGE}${j}
 
     promote_image ${CLUSTER2} ${POOL} ${IMAGE}${j}
 
-    PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMAGE}${j} | tail -n 1 | grep mirror\.primary | awk '{print $2}')
-    BDEV=$(map ${CLUSTER2} ${POOL} ${IMAGE}${j} ${PROMOTE})
+    PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMAGE}${j} | tail -n 1 | grep mirror\.primary | awk '{print $1}')
+    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} --snap-id ${PROMOTE} ${POOL}/${IMAGE}${j}
+)
     PROMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-    unmap ${CLUSTER2} ${POOL} ${IMAGE}${j} ${PROMOTE}
+    sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} --snap-id ${PROMOTE} ${POOL}/${IMAGE}${j}
 
     if [ "${DEMOTE_MD5}" != "${PROMOTE_MD5}" ]; then
 	    return 1

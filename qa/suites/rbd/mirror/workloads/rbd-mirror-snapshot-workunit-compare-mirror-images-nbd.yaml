@@ -10,7 +10,7 @@ tasks:
 - workunit:
     clients:
       cluster1.client.mirror:
-        - rbd/mirror_compare.sh
+        - rbd/compare_mirror_images.sh
     env:
       CEPH_ARGS: ''
       MIRROR_POOL_MODE: 'image'

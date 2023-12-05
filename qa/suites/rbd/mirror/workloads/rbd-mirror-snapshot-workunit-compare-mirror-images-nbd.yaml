@@ -3,7 +3,6 @@ overrides:
     ceph:
       extra_packages:
         - rbd-nbd
-        - rbd-mirror
       extra_system_packages:
         - pv
 tasks:

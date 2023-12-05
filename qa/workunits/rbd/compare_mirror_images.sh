@@ -58,6 +58,7 @@ compare_images() {
       ${POOL}/${IMG}
   demote_image ${CLUSTER1} ${POOL} ${IMG}
 
+  # demote primary image and calculate hash of its latest mirror snapshot
   DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMG} \
              | tail -n 1 | grep mirror\.primary | grep demoted)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
@@ -79,6 +80,7 @@ compare_images() {
 
   promote_image ${CLUSTER2} ${POOL} ${IMG}
 
+  # promote non-primary image and calculate hash of its latest mirror snapshot
   PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMG} \
               | tail -n 1 | grep mirror\.primary)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
@@ -119,6 +121,7 @@ do
     sudo mkfs.ext4 ${BDEV}
     sudo mkdir -p ${MNTPT}
     sudo mount ${BDEV} ${MNTPT}
+    # create mirror snapshots under I/O
     launch_manual_msnaps ${CLUSTER1} ${POOL} ${IMG} &
     run_bench ${MNTPT} ${WORKLOAD_TIMEOUT} &
   done

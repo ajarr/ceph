@@ -2,9 +2,9 @@
 
 set -ex
 
-IMAGE=image-
+IMG_PREFIX=image-
 RBD_MIRROR_MODE=snapshot
-MOUNT=/mnt/test
+MNTPT_PREFIX=/mnt/test
 WORKLOAD_TIMEOUT=5m
 
 . $(dirname $0)/rbd_mirror_helpers.sh
@@ -50,50 +50,51 @@ wait_for_demote_snap () {
 }
 
 compare_images() {
-    local j=$1
+  local j=$1
+  local IMG=${IMG_PREFIX}${j}
+  demote_image ${CLUSTER1} ${POOL} ${IMG}
 
-    demote_image ${CLUSTER1} ${POOL} ${IMAGE}${j}
+  DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMG} \
+             | tail -n 1 | grep mirror\.primary | grep demoted)
+  if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
+    DEMOTE_ID=$(echo $DEMOTE | awk '{print $1}')
+    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+             --snap-id ${DEMOTE_ID} ${POOL}/${IMG})
+  elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
+    DEMOTE_NAME=$(echo $DEMOTE | awk '{print $2}')
+    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+             ${POOL}/${IMG}@${DEMOTE_NAME})
+  else
+     echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
+     return 1
+  fi
+  DEMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
+  sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
 
-    DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMAGE}${j} \
-               | tail -n 1 | grep mirror\.primary | grep demoted)
-    if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
-      DEMOTE_ID=$(echo $DEMOTE | awk '{print $1}')
-      BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-               --snap-id ${DEMOTE_ID} ${POOL}/${IMAGE}${j})
-    elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
-      DEMOTE_NAME=$(echo $DEMOTE | awk '{print $2}')
-      BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-               ${POOL}/${IMAGE}${j}@${DEMOTE_NAME})
-    else
-       echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
-       return 1
-    fi
-    DEMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-    sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
-    wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMAGE}${j}
+  wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMG}
 
-    promote_image ${CLUSTER2} ${POOL} ${IMAGE}${j}
+  promote_image ${CLUSTER2} ${POOL} ${IMG}
 
-    PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMAGE}${j} \
-                | tail -n 1 | grep mirror\.primary)
-    if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
-      PROMOTE_ID=$(echo $PROMOTE | awk '{print $1}')
-      BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
-               --snap-id ${PROMOTE_ID} ${POOL}/${IMAGE}${j})
-    elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
-      PROMOTE_NAME=$(echo $PROMOTE | awk '{print $2}')
-      BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
-               ${POOL}/${IMAGE}${j}@${PROMOTE_NAME})
-    else
-       echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
-       return 1
-    fi
-    PROMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-    sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
+  PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMG} \
+              | tail -n 1 | grep mirror\.primary)
+  if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
+    PROMOTE_ID=$(echo $PROMOTE | awk '{print $1}')
+    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
+             --snap-id ${PROMOTE_ID} ${POOL}/${IMG})
+  elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
+    PROMOTE_NAME=$(echo $PROMOTE | awk '{print $2}')
+    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
+             ${POOL}/${IMG}@${PROMOTE_NAME})
+  else
+     echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
+     return 1
+  fi
+  PROMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
+  sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
 
-    if [ "${DEMOTE_MD5}" != "${PROMOTE_MD5}" ]; then
-	    return 1
-    fi
+  if [ "${DEMOTE_MD5}" != "${PROMOTE_MD5}" ]; then
+          return 1
+  fi
 }
 
 setup
@@ -105,24 +106,28 @@ for i in {1..10};
 do
   for j in {1..10};
   do
-    create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMAGE}${j} \
+    IMG=${IMG_PREFIX}${j}
+    MNTPT=${MNTPT_PREFIX}${j}
+    create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMG} \
       ${RBD_MIRROR_MODE} 10G
     BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-             ${POOL}/${IMAGE}${j})
+             ${POOL}/${IMG})
     sudo mkfs.ext4 ${BDEV}
-    sudo mkdir -p ${MOUNT}${j}
-    sudo mount ${BDEV} ${MOUNT}${j}
-    launch_manual_msnaps ${CLUSTER1} ${POOL} ${IMAGE}${j} &
-    run_bench ${MOUNT}${j} ${WORKLOAD_TIMEOUT} &
+    sudo mkdir -p ${MNTPT}
+    sudo mount ${BDEV} ${MNTPT}
+    launch_manual_msnaps ${CLUSTER1} ${POOL} ${IMG} &
+    run_bench ${MNTPT} ${WORKLOAD_TIMEOUT} &
   done
   wait
 
   pids=''
   for j in {1..10};
   do
-    sudo umount ${MOUNT}${j}
+    IMG=${IMG_PREFIX}${j}
+    MNTPT=${MNTPT_PREFIX}${j}
+    sudo umount ${MNTPT}
     sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} \
-      ${POOL}/${IMAGE}${j}
+      ${POOL}/${IMG}
     compare_images $j &
     pids+=" $!"
   done
@@ -139,7 +144,8 @@ do
 
   for j in {1..10};
   do
-    remove_image ${CLUSTER2} ${POOL} ${IMAGE}${j}
+    IMG=${IMG_PREFIX}${j}
+    remove_image ${CLUSTER2} ${POOL} ${IMG}
   done
 done
 

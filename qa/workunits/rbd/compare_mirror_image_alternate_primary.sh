@@ -54,7 +54,7 @@ setup
 start_mirrors ${CLUSTER1}
 start_mirrors ${CLUSTER2}
 
-#initial setup
+# initial setup
 create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMAGE} \
   ${RBD_MIRROR_MODE} 10G
 
@@ -94,31 +94,31 @@ do
 
   wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMAGE}
 
-  #swap clusters
-  TEMP=${CLUSTER1}
-  CLUSTER1=${CLUSTER2}
-  CLUSTER2=${TEMP}
-
-  #promote and calc hash
-  promote_image ${CLUSTER1} ${POOL} ${IMAGE}
-  PROMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMAGE} \
+  # promote and calc hash
+  promote_image ${CLUSTER2} ${POOL} ${IMAGE}
+  PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMAGE} \
               | tail -n 1 | grep mirror\.primary)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     PROMOTE_ID=$(echo $PROMOTE | awk '{print $1}')
-    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${PROMOTE_ID} ${POOL}/${IMAGE})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     PROMOTE_NAME=$(echo $PROMOTE | awk '{print $2}')
-    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${IMAGE}@${PROMOTE_NAME})
   else
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
   PROMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-  sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
+  sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
 
   [ "${DEMOTE_MD5}" == "${PROMOTE_MD5}" ];
+
+  # swap clusters
+  TEMP=${CLUSTER1}
+  CLUSTER1=${CLUSTER2}
+  CLUSTER2=${TEMP}
 
   BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
            ${POOL}/${IMAGE})

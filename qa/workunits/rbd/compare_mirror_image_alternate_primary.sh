@@ -65,15 +65,16 @@ sudo mkdir -p ${MOUNT}
 
 for i in {1..25};
 do
-    sudo mount ${BDEV} ${MOUNT}
-    launch_manual_msnaps ${CLUSTER1} ${POOL} ${IMAGE} &
-    run_bench ${MOUNT} ${WORKLOAD_TIMEOUT}
+  # create mirror snapshots under I/O
+  sudo mount ${BDEV} ${MOUNT}
+  launch_manual_msnaps ${CLUSTER1} ${POOL} ${IMAGE} &
+  run_bench ${MOUNT} ${WORKLOAD_TIMEOUT}
   wait
 
   sudo umount ${MOUNT}
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
 
-  # demote and calc hash
+  # demote primary image and calculate hash of its latest mirror snapshot
   demote_image ${CLUSTER1} ${POOL} ${IMAGE}
   DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMAGE} \
              | tail -n 1 | grep mirror\.primary | grep demoted)
@@ -94,7 +95,7 @@ do
 
   wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMAGE}
 
-  # promote and calc hash
+  # promote non-primary image and calculate hash of its latest mirror snapshot
   promote_image ${CLUSTER2} ${POOL} ${IMAGE}
   PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMAGE} \
               | tail -n 1 | grep mirror\.primary)
@@ -115,14 +116,14 @@ do
 
   [ "${DEMOTE_MD5}" == "${PROMOTE_MD5}" ];
 
-  # swap clusters
+  # enable mirroring on newly promoted image in the other cluster
+  BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
+           ${POOL}/${IMAGE})
+  enable_mirror ${CLUSTER2} ${POOL} ${IMAGE}
+
   TEMP=${CLUSTER1}
   CLUSTER1=${CLUSTER2}
   CLUSTER2=${TEMP}
-
-  BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-           ${POOL}/${IMAGE})
-  enable_mirror ${CLUSTER1} ${POOL} ${IMAGE}
 done
 
 echo OK

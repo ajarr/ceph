@@ -40,7 +40,7 @@ wait_for_demote_snap () {
             | grep non_primary | grep demote | grep -v "%" || true)
     if [ "$RET" != "" ]; then
       echo demoted snapshot received, continuing
-      sleep 10s #wait a bit for it to propagate
+      sleep 30s # wait a bit for it to propagate
       break
     fi
 

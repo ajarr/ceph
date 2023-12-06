@@ -59,6 +59,8 @@ compare_images() {
   demote_image ${CLUSTER1} ${POOL} ${IMG}
 
   # demote primary image and calculate hash of its latest mirror snapshot
+  local BDEV DEMOTE DEMOTE_ID DEMOTE_NAME DEMOTE_MD5
+
   DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMG} \
              | tail -n 1 | grep mirror\.primary | grep demoted)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
@@ -81,6 +83,8 @@ compare_images() {
   promote_image ${CLUSTER2} ${POOL} ${IMG}
 
   # promote non-primary image and calculate hash of its latest mirror snapshot
+  local PROMOTE PROMOTE_ID PROMOTE_NAME PROMOTE_MD5
+
   PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMG} \
               | tail -n 1 | grep mirror\.primary)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
@@ -108,10 +112,8 @@ setup
 start_mirrors ${CLUSTER1}
 start_mirrors ${CLUSTER2}
 
-for i in {1..10};
-do
-  for j in {1..10};
-  do
+for i in {1..10}; do
+  for j in {1..10}; do
     IMG=${IMG_PREFIX}${j}
     MNTPT=${MNTPT_PREFIX}${j}
     create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMG} \
@@ -128,14 +130,12 @@ do
   wait
 
   pids=''
-  for j in {1..10};
-  do
+  for j in {1..10}; do
     compare_images $j &
     pids+=" $!"
   done
 
-  for pid in $pids;
-  do
+  for pid in $pids; do
     wait "$pid"
     RC=$?
     echo $pid $RC
@@ -144,8 +144,7 @@ do
     fi
   done
 
-  for j in {1..10};
-  do
+  for j in {1..10}; do
     IMG=${IMG_PREFIX}${j}
     remove_image ${CLUSTER2} ${POOL} ${IMG}
   done

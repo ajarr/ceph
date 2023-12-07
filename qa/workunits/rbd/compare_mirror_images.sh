@@ -50,59 +50,59 @@ wait_for_demote_snap () {
 }
 
 compare_images() {
-  local IMG=${IMG_PREFIX}$1
-  local MNTPT=${MNTPT_PREFIX}$1
+  local img=${IMG_PREFIX}$1
+  local mntpt=${MNTPT_PREFIX}$1
 
-  sudo umount ${MNTPT}
+  sudo umount ${mntpt}
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} \
-      ${POOL}/${IMG}
-  demote_image ${CLUSTER1} ${POOL} ${IMG}
+      ${POOL}/${img}
+  demote_image ${CLUSTER1} ${POOL} ${img}
 
   # demote primary image and calculate hash of its latest mirror snapshot
-  local BDEV DEMOTE DEMOTE_ID DEMOTE_NAME DEMOTE_MD5
+  local bdev demote demote_id demote_name demote_md5
 
-  DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMG} \
+  demote=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${img} \
              | tail -n 1 | grep mirror\.primary | grep demoted)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
-    DEMOTE_ID=$(echo $DEMOTE | awk '{print $1}')
-    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-             --snap-id ${DEMOTE_ID} ${POOL}/${IMG})
+    demote_id=$(echo $demote | awk '{print $1}')
+    bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+             --snap-id ${demote_id} ${POOL}/${img})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
-    DEMOTE_NAME=$(echo $DEMOTE | awk '{print $2}')
-    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-             ${POOL}/${IMG}@${DEMOTE_NAME})
+    demote_name=$(echo $demote | awk '{print $2}')
+    bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+             ${POOL}/${img}@${demote_name})
   else
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
-  DEMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-  sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
+  demote_md5=$(sudo dd if=${bdev} bs=4M | md5sum | awk '{print $1}')
+  sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
 
-  wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMG}
+  wait_for_demote_snap ${CLUSTER2} ${POOL} ${img}
 
-  promote_image ${CLUSTER2} ${POOL} ${IMG}
+  promote_image ${CLUSTER2} ${POOL} ${img}
 
   # promote non-primary image and calculate hash of its latest mirror snapshot
-  local PROMOTE PROMOTE_ID PROMOTE_NAME PROMOTE_MD5
+  local promote promote_id promote_name promote_md5
 
-  PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMG} \
+  promote=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${img} \
               | tail -n 1 | grep mirror\.primary)
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
-    PROMOTE_ID=$(echo $PROMOTE | awk '{print $1}')
-    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
-             --snap-id ${PROMOTE_ID} ${POOL}/${IMG})
+    promote_id=$(echo $promote | awk '{print $1}')
+    bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
+             --snap-id ${promote_id} ${POOL}/${img})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
-    PROMOTE_NAME=$(echo $PROMOTE | awk '{print $2}')
-    BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
-             ${POOL}/${IMG}@${PROMOTE_NAME})
+    promote_name=$(echo $promote | awk '{print $2}')
+    bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
+             ${POOL}/${img}@${promote_name})
   else
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
-  PROMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
-  sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
+  promote_md5=$(sudo dd if=${bdev} bs=4M | md5sum | awk '{print $1}')
+  sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
 
-  if [ "${DEMOTE_MD5}" != "${PROMOTE_MD5}" ]; then
+  if [ "${demote_md5}" != "${promote_md5}" ]; then
           return 1
   fi
 }

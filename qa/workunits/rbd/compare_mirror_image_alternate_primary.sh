@@ -36,8 +36,11 @@ wait_for_demote_snap () {
   local image=$3
 
   for s in 1 2 4 8 8 8 8 8 8 8 8 16 16; do
-    RET=$(rbd --cluster $cluster snap ls --all $pool/$image \
-            | grep non_primary | tail -n 1 | grep demote | grep -v "%" || true)
+    RET=$(rbd --cluster $cluster snap ls --all $pool/$image --format=json \
+            | jq 'last' \
+            | jq 'select(.name | contains("non_primary"))' \
+            | jq 'select(.namespace.state == "demoted")' \
+            | jq 'select(.namespace.complete == true)')
     if [ "$RET" != "" ]; then
       echo demoted snapshot received, continuing
       break
@@ -75,7 +78,10 @@ for i in {1..25}; do
   # demote primary image and calculate hash of its latest mirror snapshot
   demote_image ${CLUSTER1} ${POOL} ${IMAGE}
   DEMOTE=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${IMAGE} \
-             | tail -n 1 | grep mirror\.primary | grep demoted)
+             --format=json \
+             | jq 'last' \
+             | jq 'select(.name | contains("mirror.primary"))' \
+             | jq 'select(.namespace.state == "demoted")')
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     DEMOTE_ID=$(echo $DEMOTE | awk '{print $1}')
     BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
@@ -96,7 +102,9 @@ for i in {1..25}; do
   # promote non-primary image and calculate hash of its latest mirror snapshot
   promote_image ${CLUSTER2} ${POOL} ${IMAGE}
   PROMOTE=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${IMAGE} \
-              | tail -n 1 | grep mirror\.primary)
+              --format=json \
+              | jq 'last' \
+              | jq 'select(.name | contains("mirror.primary"))')
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     PROMOTE_ID=$(echo $PROMOTE | awk '{print $1}')
     BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \

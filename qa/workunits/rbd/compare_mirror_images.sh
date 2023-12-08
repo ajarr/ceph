@@ -43,7 +43,6 @@ wait_for_demote_snap () {
             | jq 'select(.namespace.complete == true)')
     if [ "$RET" != "" ]; then
       echo demoted snapshot received, continuing
-      sleep 30s # wait a bit for it to propagate
       break
     fi
 

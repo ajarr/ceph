@@ -36,8 +36,11 @@ wait_for_demote_snap () {
   local image=$3
 
   for s in 1 2 4 8 8 8 8 8 8 8 8 16 16; do
-    RET=$(rbd --cluster $cluster snap ls --all $pool/$image | tail -n 1 \
-            | grep non_primary | grep demote | grep -v "%" || true)
+    RET=$(rbd --cluster $cluster snap ls --all $pool/$image --format=json \
+            | jq 'last' \
+            | jq 'select(.name | contains("non_primary"))' \
+            | jq 'select(.namespace.state == "demoted")' \
+            | jq 'select(.namespace.complete == true)')
     if [ "$RET" != "" ]; then
       echo demoted snapshot received, continuing
       sleep 30s # wait a bit for it to propagate
@@ -61,14 +64,16 @@ compare_images() {
   # demote primary image and calculate hash of its latest mirror snapshot
   local bdev demote demote_id demote_name demote_md5
 
-  demote=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${img} \
-             | tail -n 1 | grep mirror\.primary | grep demoted)
+  demote=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${img} --format=json \
+             | jq 'last' \
+             | jq 'select(.name | contains("mirror.primary"))' \
+             | jq 'select(.namespace.state == "demoted")')
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
-    demote_id=$(echo $demote | awk '{print $1}')
+    demote_id=$(echo $demote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${demote_id} ${POOL}/${img})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
-    demote_name=$(echo $demote | awk '{print $2}')
+    demote_name=$(echo $demote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${img}@${demote_name})
   else
@@ -85,14 +90,15 @@ compare_images() {
   # promote non-primary image and calculate hash of its latest mirror snapshot
   local promote promote_id promote_name promote_md5
 
-  promote=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${img} \
-              | tail -n 1 | grep mirror\.primary)
+  promote=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${img} --format=json \
+              | jq 'last' \
+              | jq 'select(.name | contains("mirror.primary"))')
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
-    promote_id=$(echo $promote | awk '{print $1}')
+    promote_id=$(echo $promote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${promote_id} ${POOL}/${img})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
-    promote_name=$(echo $promote | awk '{print $2}')
+    promote_name=$(echo $promote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${img}@${promote_name})
   else

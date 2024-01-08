@@ -351,7 +351,7 @@ setup_tempdir()
 setup()
 {
     local c
-    trap 'cleanup $?' INT TERM EXIT
+    # trap 'cleanup $?' INT TERM EXIT
 
     setup_tempdir
     if [ -z "${RBD_MIRROR_USE_EXISTING_CLUSTER}" ]; then

@@ -58,9 +58,9 @@ compare_images() {
   sudo umount ${mntpt}
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} \
       ${POOL}/${img}
-  demote_image ${CLUSTER1} ${POOL} ${img}
 
   # demote primary image and calculate hash of its latest mirror snapshot
+  demote_image ${CLUSTER1} ${POOL} ${img}
   local bdev demote demote_id demote_name demote_md5
 
   demote=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${img} --format=json \
@@ -80,13 +80,13 @@ compare_images() {
      return 1
   fi
   demote_md5=$(sudo dd if=${bdev} bs=4M | md5sum | awk '{print $1}')
+  echo "demote_md5:$demote_md5 for pool/image:$POOL/$img in cluster:$CLUSTER1"
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
 
   wait_for_demote_snap ${CLUSTER2} ${POOL} ${img}
 
-  promote_image ${CLUSTER2} ${POOL} ${img}
-
   # promote non-primary image and calculate hash of its latest mirror snapshot
+  promote_image ${CLUSTER2} ${POOL} ${img}
   local promote promote_id promote_name promote_md5
 
   promote=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${img} --format=json \
@@ -105,10 +105,12 @@ compare_images() {
      return 1
   fi
   promote_md5=$(sudo dd if=${bdev} bs=4M | md5sum | awk '{print $1}')
+  echo "promote_md5:$promote_md5 for pool/image:$POOL/$img in cluster:$CLUSTER2"
   sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
 
   if [ "${demote_md5}" != "${promote_md5}" ]; then
-          return 1
+    echo "demote_md5:$demote_md5 not same as promote_md5:$promote_md5 for pool/image:$POOL/$img"
+    return 1
   fi
 }
 

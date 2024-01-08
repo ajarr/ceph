@@ -376,36 +376,38 @@ cleanup()
 
     set +e
 
-    if [ "${error_code}" -ne 0 ]; then
-        status
-    fi
+    sleep 3600
 
-    if [ -z "${RBD_MIRROR_NOCLEANUP}" ]; then
-        local cluster instance
-
-        CEPH_ARGS='' ceph --cluster ${CLUSTER1} osd pool rm ${POOL} ${POOL} --yes-i-really-really-mean-it
-        CEPH_ARGS='' ceph --cluster ${CLUSTER2} osd pool rm ${POOL} ${POOL} --yes-i-really-really-mean-it
-        CEPH_ARGS='' ceph --cluster ${CLUSTER1} osd pool rm ${PARENT_POOL} ${PARENT_POOL} --yes-i-really-really-mean-it
-        CEPH_ARGS='' ceph --cluster ${CLUSTER2} osd pool rm ${PARENT_POOL} ${PARENT_POOL} --yes-i-really-really-mean-it
-
-        for cluster in "${CLUSTER1}" "${CLUSTER2}"; do
-            stop_mirrors "${cluster}"
-        done
-
-        if [ -z "${RBD_MIRROR_USE_EXISTING_CLUSTER}" ]; then
-            cd ${CEPH_ROOT}
-            CEPH_ARGS='' ${CEPH_SRC}/mstop.sh ${CLUSTER1}
-            CEPH_ARGS='' ${CEPH_SRC}/mstop.sh ${CLUSTER2}
-        fi
-        test "${RBD_MIRROR_TEMDIR}" = "${TEMPDIR}" || rm -Rf ${TEMPDIR}
-    fi
-
-    if [ "${error_code}" -eq 0 ]; then
-        echo "OK"
-    else
-        echo "FAIL"
-    fi
-
+#    if [ "${error_code}" -ne 0 ]; then
+#        status
+#    fi
+#
+#    if [ -z "${RBD_MIRROR_NOCLEANUP}" ]; then
+#        local cluster instance
+#
+#        CEPH_ARGS='' ceph --cluster ${CLUSTER1} osd pool rm ${POOL} ${POOL} --yes-i-really-really-mean-it
+#        CEPH_ARGS='' ceph --cluster ${CLUSTER2} osd pool rm ${POOL} ${POOL} --yes-i-really-really-mean-it
+#        CEPH_ARGS='' ceph --cluster ${CLUSTER1} osd pool rm ${PARENT_POOL} ${PARENT_POOL} --yes-i-really-really-mean-it
+#        CEPH_ARGS='' ceph --cluster ${CLUSTER2} osd pool rm ${PARENT_POOL} ${PARENT_POOL} --yes-i-really-really-mean-it
+#
+#        for cluster in "${CLUSTER1}" "${CLUSTER2}"; do
+#            stop_mirrors "${cluster}"
+#        done
+#
+#        if [ -z "${RBD_MIRROR_USE_EXISTING_CLUSTER}" ]; then
+#            cd ${CEPH_ROOT}
+#            CEPH_ARGS='' ${CEPH_SRC}/mstop.sh ${CLUSTER1}
+#            CEPH_ARGS='' ${CEPH_SRC}/mstop.sh ${CLUSTER2}
+#        fi
+#        test "${RBD_MIRROR_TEMDIR}" = "${TEMPDIR}" || rm -Rf ${TEMPDIR}
+#    fi
+#
+#    if [ "${error_code}" -eq 0 ]; then
+#        echo "OK"
+#    else
+#        echo "FAIL"
+#    fi
+#
     exit ${error_code}
 }
 

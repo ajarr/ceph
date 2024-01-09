@@ -67,6 +67,7 @@ compare_images() {
              | jq 'last' \
              | jq 'select(.name | contains("mirror.primary"))' \
              | jq 'select(.namespace.state == "demoted")')
+  sleep 30
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     demote_id=$(echo $demote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
@@ -92,6 +93,7 @@ compare_images() {
   promote=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${img} --format=json \
               | jq 'last' \
               | jq 'select(.name | contains("mirror.primary"))')
+  sleep 30
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     promote_id=$(echo $promote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \

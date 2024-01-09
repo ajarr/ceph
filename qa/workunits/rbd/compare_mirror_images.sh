@@ -79,6 +79,7 @@ compare_images() {
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
+  sleep 30
   demote_md5=$(sudo md5sum ${bdev} | awk '{print $1}')
   echo "demote_md5:$demote_md5 for pool/image:$POOL/$img in cluster:$CLUSTER1 mapped to bdev:$bdev"
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
@@ -104,6 +105,7 @@ compare_images() {
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
+  sleep 30
   promote_md5=$(sudo md5sum ${bdev} | awk '{print $1}')
   echo "promote_md5:$promote_md5 for pool/image:$POOL/$img in cluster:$CLUSTER2 mapped to bdev:$bdev"
   sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}

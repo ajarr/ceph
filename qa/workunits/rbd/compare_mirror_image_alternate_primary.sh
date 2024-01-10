@@ -30,7 +30,7 @@ run_bench() {
     | pv -L 1k --timer &> /dev/null" || true
 }
 
-wait_for_demote_snap () {
+wait_for_non_primary_demoted_mirror_snap() {
   local cluster=$1
   local pool=$2
   local image=$3
@@ -43,12 +43,15 @@ wait_for_demote_snap () {
             | jq 'select(.namespace.complete == true)')
     if [ "$RET" != "" ]; then
       echo demoted snapshot received, continuing
-      break
+      return 0
     fi
 
     echo waiting for demoted snapshot...
     sleep $s
   done
+
+  echo demoted snapshot of pool/img:$pool/$image not received in cluster:$cluster
+  return 1
 }
 
 setup
@@ -94,10 +97,10 @@ for i in {1..25}; do
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
-  DEMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
+  DEMOTE_MD5=$(sudo md5sum ${BDEV} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
 
-  wait_for_demote_snap ${CLUSTER2} ${POOL} ${IMAGE}
+  wait_for_non_primary_demoted_mirror_snap ${CLUSTER2} ${POOL} ${IMAGE}
 
   # promote non-primary image and calculate hash of its latest mirror snapshot
   promote_image ${CLUSTER2} ${POOL} ${IMAGE}
@@ -117,7 +120,7 @@ for i in {1..25}; do
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
-  PROMOTE_MD5=$(sudo dd if=${BDEV} bs=4M | md5sum | awk '{print $1}')
+  PROMOTE_MD5=$(sudo md5sum ${BDEV} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
 
   [ "${DEMOTE_MD5}" == "${PROMOTE_MD5}" ];

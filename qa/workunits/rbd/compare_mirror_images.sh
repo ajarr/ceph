@@ -30,7 +30,7 @@ run_bench() {
     | pv -L 1k --timer &> /dev/null" || true
 }
 
-wait_for_demote_snap () {
+wait_for_non_primary_demoted_mirror_snap() {
   local cluster=$1
   local pool=$2
   local image=$3
@@ -43,26 +43,52 @@ wait_for_demote_snap () {
             | jq 'select(.namespace.complete == true)')
     if [ "$RET" != "" ]; then
       echo demoted snapshot received, continuing
-      break
+      return 0
     fi
 
     echo waiting for demoted snapshot...
     sleep $s
   done
+
+  echo demoted snapshot of pool/img:$pool/$image not received in cluster:$cluster
+  return 1
 }
 
-compare_images() {
+wait_for_image_removal () {
+  local cluster=$1
+  local pool=$2
+  local image=$3
+  local img_in_list
+
+  for s in 1 2 4 8 8 8 8 8 8 8 8 16 16; do
+    img_in_list=$(rbd --cluster $cluster ls -p $pool --format=json \
+                    | jq --arg img $image 'index($img)')
+    if [[ $img_in_list == null ]]; then
+      echo image:$image removed from cluster:$cluster pool:$pool
+      return 0
+    fi
+
+    echo waiting for image $image to be removed from \
+           cluster:$cluster pool:$pool...
+    sleep $s
+  done
+
+  echo image:$image not removed from cluster:$cluster pool:$pool
+  return 1
+}
+
+compare_demoted_promoted_mirror_snaps() {
   local img=${IMG_PREFIX}$1
   local mntpt=${MNTPT_PREFIX}$1
+  local bdev demote demote_id demote_name demote_md5
+  local promote promote_id promote_name promote_md5
 
   sudo umount ${mntpt}
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} \
       ${POOL}/${img}
-  demote_image ${CLUSTER1} ${POOL} ${img}
 
   # demote primary image and calculate hash of its latest mirror snapshot
-  local bdev demote demote_id demote_name demote_md5
-
+  demote_image ${CLUSTER1} ${POOL} ${img}
   demote=$(rbd --cluster ${CLUSTER1} snap ls --all ${POOL}/${img} --format=json \
              | jq 'last' \
              | jq 'select(.name | contains("mirror.primary"))' \
@@ -71,6 +97,10 @@ compare_images() {
     demote_id=$(echo $demote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${demote_id} ${POOL}/${img})
+    for i in {1..30}; do
+      sudo blockdev --getsize64 ${bdev}
+      sleep 1
+    done
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     demote_name=$(echo $demote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
@@ -79,16 +109,13 @@ compare_images() {
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
-  demote_md5=$(sudo dd if=${bdev} bs=4M | md5sum | awk '{print $1}')
+  demote_md5=$(sudo md5sum ${bdev} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
 
-  wait_for_demote_snap ${CLUSTER2} ${POOL} ${img}
-
-  promote_image ${CLUSTER2} ${POOL} ${img}
+  wait_for_non_primary_demoted_mirror_snap ${CLUSTER2} ${POOL} ${img}
 
   # promote non-primary image and calculate hash of its latest mirror snapshot
-  local promote promote_id promote_name promote_md5
-
+  promote_image ${CLUSTER2} ${POOL} ${img}
   promote=$(rbd --cluster ${CLUSTER2} snap ls --all ${POOL}/${img} --format=json \
               | jq 'last' \
               | jq 'select(.name | contains("mirror.primary"))')
@@ -96,6 +123,10 @@ compare_images() {
     promote_id=$(echo $promote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${promote_id} ${POOL}/${img})
+    for i in {1..30}; do
+      sudo blockdev --getsize64 ${bdev}
+      sleep 1
+    done
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     promote_name=$(echo $promote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
@@ -104,11 +135,12 @@ compare_images() {
      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
      return 1
   fi
-  promote_md5=$(sudo dd if=${bdev} bs=4M | md5sum | awk '{print $1}')
+  promote_md5=$(sudo md5sum ${bdev} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
 
   if [ "${demote_md5}" != "${promote_md5}" ]; then
-          return 1
+    echo "demote_md5:${demote_md5} != promote_md5:${promote_md5} for pool/img:${POOL}/${img}"
+    return 1
   fi
 }
 
@@ -136,7 +168,7 @@ for i in {1..10}; do
 
   pids=''
   for j in {1..10}; do
-    compare_images $j &
+    compare_demoted_promoted_mirror_snaps $j &
     pids+=" $!"
   done
 
@@ -151,7 +183,11 @@ for i in {1..10}; do
 
   for j in {1..10}; do
     IMG=${IMG_PREFIX}${j}
+    # Allow removal of non-primary image by checking that mirroring
+    # image status is "up+replaying"
+    wait_for_replaying_status_in_pool_dir ${CLUSTER1} ${POOL} ${IMG}
     remove_image ${CLUSTER2} ${POOL} ${IMG}
+    wait_for_image_removal ${CLUSTER1} ${POOL} ${IMG}
   done
 done
 

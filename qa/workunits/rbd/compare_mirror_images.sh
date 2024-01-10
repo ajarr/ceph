@@ -71,11 +71,8 @@ compare_images() {
     demote_id=$(echo $demote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${demote_id} ${POOL}/${img})
-    for i in {1..30}; do
-      bdevsize=$(sudo blockdev --getsize64 ${bdev})
-      echo "size of mapped ${POOL}/${img} --snap-id ${demote_id} to ${bdev} is ${bdevsize} bytes"
-      sleep 1
-    done
+    bdevsize=$(sudo blockdev --getsize64 ${bdev})
+    echo "size of mapped ${POOL}/${img} --snap-id ${demote_id} to ${bdev} is ${bdevsize} bytes"
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     demote_name=$(echo $demote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
@@ -101,11 +98,8 @@ compare_images() {
     promote_id=$(echo $promote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              --snap-id ${promote_id} ${POOL}/${img})
-    for i in {1..30}; do
-      bdevsize=$(sudo blockdev --getsize64 ${bdev})
-      echo "size of mapped ${POOL}/${img} --snap-id ${promote_id} to ${bdev} is ${bdevsize} bytes"
-      sleep 1
-    done
+    bdevsize=$(sudo blockdev --getsize64 ${bdev})
+    echo "size of mapped ${POOL}/${img} --snap-id ${promote_id} to ${bdev} is ${bdevsize} bytes"
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     promote_name=$(echo $promote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \

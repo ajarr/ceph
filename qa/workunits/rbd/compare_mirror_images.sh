@@ -34,14 +34,15 @@ wait_for_non_primary_demoted_mirror_snap() {
   local cluster=$1
   local pool=$2
   local image=$3
+  local ret
 
   for s in 1 2 4 8 8 8 8 8 8 8 8 16 16; do
-    RET=$(rbd --cluster $cluster snap ls --all $pool/$image --format=json \
+    ret=$(rbd --cluster $cluster snap ls --all $pool/$image --format=json \
             | jq 'last' \
             | jq 'select(.name | contains("non_primary"))' \
             | jq 'select(.namespace.state == "demoted")' \
             | jq 'select(.namespace.complete == true)')
-    if [ "$RET" != "" ]; then
+    if [ "$ret" != "" ]; then
       echo "demoted snapshot received, continuing"
       return 0
     fi
@@ -98,14 +99,11 @@ compare_demoted_promoted_mirror_snaps() {
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     demote_id=$(echo $demote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-             --snap-id ${demote_id} ${POOL}/${img})
+             -o try-netlink --snap-id ${demote_id} ${POOL}/${img})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     demote_name=$(echo $demote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${img}@${demote_name})
-  else
-     echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
-     return 1
   fi
   demote_md5=$(sudo md5sum ${bdev} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
@@ -121,14 +119,11 @@ compare_demoted_promoted_mirror_snaps() {
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     promote_id=$(echo $promote | jq -r '.id')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
-             --snap-id ${promote_id} ${POOL}/${img})
+             -o try-netlink --snap-id ${promote_id} ${POOL}/${img})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     promote_name=$(echo $promote | jq -r '.name')
     bdev=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${img}@${promote_name})
-  else
-     echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
-     return 1
   fi
   promote_md5=$(sudo md5sum ${bdev} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${bdev}
@@ -151,8 +146,16 @@ for i in {1..10}; do
     MNTPT=${MNTPT_PREFIX}${j}
     create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMG} \
       ${RBD_MIRROR_MODE} 10G
-    BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-             ${POOL}/${IMG})
+    if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
+      BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+               -o try-netlink ${POOL}/${IMG})
+    elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
+      BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+               ${POOL}/${IMG})
+    else
+      echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
+      return 1
+    fi
     sudo mkfs.ext4 ${BDEV}
     sudo mkdir -p ${MNTPT}
     sudo mount ${BDEV} ${MNTPT}

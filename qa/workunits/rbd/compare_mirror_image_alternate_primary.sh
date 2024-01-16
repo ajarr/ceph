@@ -64,8 +64,16 @@ start_mirrors ${CLUSTER2}
 create_image_and_enable_mirror ${CLUSTER1} ${POOL} ${IMAGE} \
   ${RBD_MIRROR_MODE} 10G
 
-BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-         ${POOL}/${IMAGE})
+if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
+  BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+           -o try-netlink ${POOL}/${IMAGE})
+elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
+  BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
+           ${POOL}/${IMAGE})
+else
+  echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
+  return 1
+fi
 sudo mkfs.ext4 ${BDEV}
 sudo mkdir -p ${MOUNT}
 
@@ -89,14 +97,11 @@ for i in {1..25}; do
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     DEMOTE_ID=$(echo $DEMOTE | jq -r '.id')
     BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
-             --snap-id ${DEMOTE_ID} ${POOL}/${IMAGE})
+             -o try-netlink --snap-id ${DEMOTE_ID} ${POOL}/${IMAGE})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     DEMOTE_NAME=$(echo $DEMOTE | jq -r '.name')
     BDEV=$(sudo rbd --cluster ${CLUSTER1} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${IMAGE}@${DEMOTE_NAME})
-  else
-     echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
-     return 1
   fi
   DEMOTE_MD5=$(sudo md5sum ${BDEV} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}
@@ -112,14 +117,11 @@ for i in {1..25}; do
   if [[ $RBD_DEVICE_TYPE == "nbd" ]]; then
     PROMOTE_ID=$(echo $PROMOTE | jq -r '.id')
     BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
-             --snap-id ${PROMOTE_ID} ${POOL}/${IMAGE})
+             -o try-netlink --snap-id ${PROMOTE_ID} ${POOL}/${IMAGE})
   elif [[ $RBD_DEVICE_TYPE == "krbd" ]]; then
     PROMOTE_NAME=$(echo $PROMOTE | jq -r '.name')
     BDEV=$(sudo rbd --cluster ${CLUSTER2} device map -t ${RBD_DEVICE_TYPE} \
              ${POOL}/${IMAGE}@${PROMOTE_NAME})
-  else
-     echo "Unknown RBD_DEVICE_TYPE: ${RBD_DEVICE_TYPE}"
-     return 1
   fi
   PROMOTE_MD5=$(sudo md5sum ${BDEV} | awk '{print $1}')
   sudo rbd --cluster ${CLUSTER2} device unmap -t ${RBD_DEVICE_TYPE} ${BDEV}

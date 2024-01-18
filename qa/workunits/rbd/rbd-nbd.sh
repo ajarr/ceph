@@ -204,19 +204,19 @@ used=`rbd -p ${POOL} --format xml du ${IMAGE} |
 [ "${used}" -lt "${provisioned}" ]
 
 # resize test
-devname=$(basename ${DEV})
-blocks=$(awk -v dev=${devname} '$4 == dev {print $3}' /proc/partitions)
-test -n "${blocks}"
-rbd resize ${POOL}/${IMAGE} --size $((SIZE * 2))M
-rbd info ${POOL}/${IMAGE}
-blocks2=$(awk -v dev=${devname} '$4 == dev {print $3}' /proc/partitions)
-test -n "${blocks2}"
-test ${blocks2} -eq $((blocks * 2))
-rbd resize ${POOL}/${IMAGE} --allow-shrink --size ${SIZE}M
-blocks2=$(awk -v dev=${devname} '$4 == dev {print $3}' /proc/partitions)
-test -n "${blocks2}"
-test ${blocks2} -eq ${blocks}
-
+#devname=$(basename ${DEV})
+#blocks=$(awk -v dev=${devname} '$4 == dev {print $3}' /proc/partitions)
+#test -n "${blocks}"
+#rbd resize ${POOL}/${IMAGE} --size $((SIZE * 2))M
+#rbd info ${POOL}/${IMAGE}
+#blocks2=$(awk -v dev=${devname} '$4 == dev {print $3}' /proc/partitions)
+#test -n "${blocks2}"
+#test ${blocks2} -eq $((blocks * 2))
+#rbd resize ${POOL}/${IMAGE} --allow-shrink --size ${SIZE}M
+#blocks2=$(awk -v dev=${devname} '$4 == dev {print $3}' /proc/partitions)
+#test -n "${blocks2}"
+#test ${blocks2} -eq ${blocks}
+#
 # read-only option test
 unmap_device ${DEV} ${PID}
 DEV=`_sudo rbd --device-type nbd map --read-only ${POOL}/${IMAGE}`

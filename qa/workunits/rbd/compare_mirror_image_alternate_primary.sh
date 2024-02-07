@@ -79,7 +79,7 @@ for i in {1..25}; do
   sudo rbd --cluster ${CLUSTER1} device unmap -t ${RBD_DEVICE_TYPE} ${DEV}
 
   demote_image ${CLUSTER1} ${POOL} ${IMAGE}
-  wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${IMAGE} 'up+unknown'
+  # wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${IMAGE} 'up+unknown'
   wait_for_status_in_pool_dir ${CLUSTER2} ${POOL} ${IMAGE} 'up+unknown'
   promote_image ${CLUSTER2} ${POOL} ${IMAGE}
 

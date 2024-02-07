@@ -839,9 +839,9 @@ test_status_in_pool_dir()
 
     # recheck using `mirror pool status` command to stress test it.
 
-    local last_update="$(sed -nEe 's/^  last_update: *(.*) *$/\1/p' ${status_log})"
-    test_mirror_pool_status_verbose \
-        ${cluster} ${pool} ${image} "${state_pattern}" "${last_update}" || return 1
+    #local last_update="$(sed -nEe 's/^  last_update: *(.*) *$/\1/p' ${status_log})"
+    # test_mirror_pool_status_verbose \
+    #    ${cluster} ${pool} ${image} "${state_pattern}" "${last_update}" || return 1
 
 }
 

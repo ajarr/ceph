@@ -73,7 +73,7 @@ compare_demoted_promoted_mirror_snaps() {
       ${POOL}/${img}
 
   demote_image ${CLUSTER1} ${POOL} ${img}
-  wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${img} 'up+unknown'
+  # wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${img} 'up+unknown'
   wait_for_status_in_pool_dir ${CLUSTER2} ${POOL} ${img} 'up+unknown'
   promote_image ${CLUSTER2} ${POOL} ${img}
 

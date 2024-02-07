@@ -841,11 +841,8 @@ test_status_in_pool_dir()
 
     local last_update="$(sed -nEe 's/^  last_update: *(.*) *$/\1/p' ${status_log})"
     test_mirror_pool_status_verbose \
-        ${cluster} ${pool} ${image} "${state_pattern}" "${last_update}" &&
-    return 0
+        ${cluster} ${pool} ${image} "${state_pattern}" "${last_update}" || return 1
 
-    echo "'mirror pool status' test failed" >&2
-    exit 1
 }
 
 test_mirror_pool_status_verbose()

@@ -11,7 +11,6 @@ RBD_IMAGE_FEATURES='layering,exclusive-lock,object-map,fast-diff'
 RBD_MIRROR_INSTANCES=1
 RBD_MIRROR_MODE=snapshot
 RBD_MIRROR_USE_EXISTING_CLUSTER=1
-WORKLOAD_TIMEOUT=5m
 
 . $(dirname $0)/rbd_mirror_helpers.sh
 
@@ -22,21 +21,25 @@ take_mirror_snapshots() {
 
   for i in {1..30}; do
     mirror_image_snapshot $cluster $pool $image
-    sleep 3s;
+    sleep 3
   done
 }
 
 slow_untar_workload() {
-  local tarball_src_path=$1
-  local mountpt=$2
-  local timeout=$3
+  local mountpt=$1
 
-  cp $tarball_src_path $mountpt/kernel.tar.gz
+  rm -rf $mountpt/*
+  cp linux-5.4.tar.gz $mountpt
   # run workload that updates the data and metadata of multiple files on disk.
   # rate limit the workload such that the mirror snapshots can be taken as the
   # contents of the image are progressively changed by the workload.
-  timeout $timeout bash -c "zcat $mountpt/kernel.tar.gz \
-    | pv -L 256K | tar xf - -C $mountpt" || true
+  local ret=0
+  timeout 5m bash -c "zcat $mountpt/linux-5.4.tar.gz \
+    | pv -L 256K | tar xf - -C $mountpt" || ret=$?
+  if ((ret != 124)); then
+    echo "Workload completed prematurely"
+    exit 1
+  fi
 }
 
 setup
@@ -61,17 +64,15 @@ fi
 sudo mkfs.ext4 ${DEV}
 mkdir ${MOUNT}
 
-TARBALL_SRC=kernel.tar.gz
-wget https://download.ceph.com/qa/linux-5.4.tar.gz -O ${TARBALL_SRC}
+wget https://download.ceph.com/qa/linux-5.4.tar.gz
 
 for i in {1..25}; do
   # create mirror snapshots every few seconds under I/O
   sudo mount ${DEV} ${MOUNT}
   sudo chown $(whoami) ${MOUNT}
   take_mirror_snapshots ${CLUSTER1} ${POOL} ${IMAGE} &
-  slow_untar_workload ${TARBALL_SRC} ${MOUNT} ${WORKLOAD_TIMEOUT}
+  slow_untar_workload ${MOUNT}
   wait
-
   sudo umount ${MOUNT}
 
   # calculate hash before demotion of primary image

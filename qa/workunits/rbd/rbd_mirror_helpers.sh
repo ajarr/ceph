@@ -823,7 +823,7 @@ test_status_in_pool_dir()
     local description_pattern="$5"
     local service_pattern="$6"
 
-    local status_log=${TEMPDIR}/$(mkfname ${cluster}-${pool}-${image}.mirror_status)
+    local status_log=${TEMPDIR}/$(uuidgen).mirror_image_status
     CEPH_ARGS='' rbd --cluster ${cluster} mirror image status ${pool}/${image} |
         tee ${status_log} >&2
     grep "^  state: .*${state_pattern}" ${status_log} || return 1
@@ -856,7 +856,7 @@ test_mirror_pool_status_verbose()
     local state_pattern="$4"
     local prev_last_update="$5"
 
-    local status_log=${TEMPDIR}/$(mkfname ${cluster}-${pool}.mirror_status)
+    local status_log=${TEMPDIR}/$(uuidgen).mirror_pool_status
 
     rbd --cluster ${cluster} mirror pool status ${pool} --verbose --format xml \
         > ${status_log}

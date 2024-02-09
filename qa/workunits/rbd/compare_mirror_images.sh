@@ -11,7 +11,6 @@ RBD_IMAGE_FEATURES='layering,exclusive-lock,object-map,fast-diff'
 RBD_MIRROR_INSTANCES=1
 RBD_MIRROR_MODE=snapshot
 RBD_MIRROR_USE_EXISTING_CLUSTER=1
-WORKLOAD_TIMEOUT=5m
 
 . $(dirname $0)/rbd_mirror_helpers.sh
 
@@ -22,36 +21,36 @@ take_mirror_snapshots() {
 
   for i in {1..30}; do
     mirror_image_snapshot $cluster $pool $image
-    sleep 3s;
+    sleep 3
   done
 }
 
 slow_untar_workload() {
-  local tarball_src_path=$1
-  local mountpt=$2
-  local timeout=$3
+  local mountpt=$1
 
-  cp $tarball_src_path $mountpt/kernel.tar.gz
+  cp linux-5.4.tar.gz $mountpt
   # run workload that updates the data and metadata of multiple files on disk.
   # rate limit the workload such that the mirror snapshots can be taken as the
   # contents of the image are progressively changed by the workload.
-  timeout $timeout bash -c "zcat $mountpt/kernel.tar.gz \
-    | pv -L 256K | tar xf - -C $mountpt" || true
+  local ret=0
+  timeout 5m bash -c "zcat $mountpt/linux-5.4.tar.gz \
+    | pv -L 256K | tar xf - -C $mountpt" || ret=$?
+  if ((ret != 124)); then
+    echo "Workload completed prematurely"
+    exit 1
+  fi
+
 }
 
-wait_for_image_removal () {
+wait_for_image_removal() {
   local cluster=$1
   local pool=$2
   local image=$3
 
   for s in 1 2 4 8 8 8 8 8 8 8 8 16 16; do
-    if [[ -z $(rbd --cluster $cluster ls $pool | grep -w $image) ]]; then
-      echo "image:${image} removed from cluster:${cluster} pool:${pool}"
+    if ! rbd --cluster $cluster ls $pool | grep -wq $image; then
       return 0
     fi
-
-    echo "waiting for image ${image} to be removed from \
-      cluster:${cluster} pool:${pool} ..."
     sleep $s
   done
 
@@ -59,7 +58,7 @@ wait_for_image_removal () {
   return 1
 }
 
-compare_demoted_promoted_mirror_snaps() {
+compare_demoted_promoted_mirror_images() {
   local dev=$1
   local img=${IMG_PREFIX}$2
   local mntpt=${MNTPT_PREFIX}$2
@@ -98,11 +97,13 @@ setup
 start_mirrors ${CLUSTER1}
 start_mirrors ${CLUSTER2}
 
-TARBALL_SRC=kernel.tar.gz
-wget https://download.ceph.com/qa/linux-5.4.tar.gz -O ${TARBALL_SRC}
+wget https://download.ceph.com/qa/linux-5.4.tar.gz
 
 for i in {1..10}; do
   DEVS=()
+  SNAP_PIDS=''
+  COMPARE_PIDS=''
+  WORKLOAD_PIDS=''
   for j in {1..10}; do
     IMG=${IMG_PREFIX}${j}
     MNTPT=${MNTPT_PREFIX}${j}
@@ -125,14 +126,36 @@ for i in {1..10}; do
     sudo chown $(whoami) ${MNTPT}
     # create mirror snapshots under I/O every few seconds
     take_mirror_snapshots ${CLUSTER1} ${POOL} ${IMG} &
-    slow_untar_workload ${TARBALL_SRC} ${MNTPT} ${WORKLOAD_TIMEOUT} &
+    SNAP_PIDS+=" $!"
+    slow_untar_workload ${MNTPT} &
+    WORKLOAD_PIDS+=" $!"
   done
-  wait
+  for pid in $SNAP_PIDS; do
+    wait "$pid" || ret=$?
+  done
+  if ((ret != 0)); then
+    echo "take_mirror_snapshots failed"
+    exit 1
+  fi
+  for pid in $WORKLOAD_PIDS; do
+    wait "$pid" || ret=$?
+  done
+  if ((ret != 0)); then
+    echo "slow_untar_workload failed"
+    exit 1
+  fi
 
   for j in {1..10}; do
-    compare_demoted_promoted_mirror_snaps ${DEVS[$j-1]} $j &
+    compare_demoted_promoted_mirror_images ${DEVS[$j-1]} $j &
+    COMPARE_PIDS+=" $!"
   done
-  wait
+  for pid in $COMPARE_PIDS; do
+    wait "$pid" || ret=$?
+  done
+  if ((ret != 0)); then
+    echo "compare_demoted_promoted_images failed"
+    exit 1
+  fi
 
   for j in {1..10}; do
     IMG=${IMG_PREFIX}${j}

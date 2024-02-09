@@ -823,23 +823,23 @@ test_status_in_pool_dir()
     local description_pattern="$5"
     local service_pattern="$6"
 
-    local status_log=${TEMPDIR}/$(mkfname ${cluster}-${pool}-${image}.mirror_status)
-    CEPH_ARGS='' rbd --cluster ${cluster} mirror image status ${pool}/${image} |
-        tee ${status_log} >&2
-    grep "^  state: .*${state_pattern}" ${status_log} || return 1
-    grep "^  description: .*${description_pattern}" ${status_log} || return 1
+    local status=$(CEPH_ARGS='' rbd --cluster ${cluster} mirror image status \
+                     ${pool}/${image})
+    echo "$status" | grep "^  state: .*${state_pattern}"  || return 1
+    echo "$status" | grep "^  description: .*${description_pattern}" || return 1
 
     if [ -n "${service_pattern}" ]; then
-        grep "service: *${service_pattern}" ${status_log} || return 1
+        echo "$status" | grep "service: *${service_pattern}" || return 1
     elif echo ${state_pattern} | grep '^up+'; then
-        grep "service: *${MIRROR_USER_ID_PREFIX}.* on " ${status_log} || return 1
+        echo "$status" | grep "service: *${MIRROR_USER_ID_PREFIX}.* on " || return 1
     else
-        grep "service: " ${status_log} && return 1
+        echo "$status" | grep "service: " && return 1
     fi
 
     # recheck using `mirror pool status` command to stress test it.
 
-    local last_update="$(sed -nEe 's/^  last_update: *(.*) *$/\1/p' ${status_log})"
+    local last_update="$(echo "$status" | \
+                           sed -nEe 's/^  last_update: *(.*) *$/\1/p')"
     test_mirror_pool_status_verbose \
         ${cluster} ${pool} ${image} "${state_pattern}" "${last_update}" &&
     return 0
@@ -856,16 +856,14 @@ test_mirror_pool_status_verbose()
     local state_pattern="$4"
     local prev_last_update="$5"
 
-    local status_log=${TEMPDIR}/$(mkfname ${cluster}-${pool}.mirror_status)
-
-    rbd --cluster ${cluster} mirror pool status ${pool} --verbose --format xml \
-        > ${status_log}
+    local status=$(rbd --cluster ${cluster} mirror pool status ${pool} \
+                     --verbose --format xml)
 
     local last_update state
-    last_update=$($XMLSTARLET sel -t -v \
-        "//images/image[name='${image}']/last_update" < ${status_log})
-    state=$($XMLSTARLET sel -t -v \
-        "//images/image[name='${image}']/state" < ${status_log})
+    last_update=$(echo "$status" | $XMLSTARLET sel -t -v \
+        "//images/image[name='${image}']/last_update")
+    state=$(echo "$status" | $XMLSTARLET sel -t -v \
+        "//images/image[name='${image}']/state")
 
     echo "${state}" | grep "${state_pattern}" ||
     test "${last_update}" '>' "${prev_last_update}"

@@ -1,0 +1,4 @@
+overrides:
+  kernel:
+    client:
+      branch: wip-revert-exclusive-lock-snapc

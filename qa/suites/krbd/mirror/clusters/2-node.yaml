@@ -6,8 +6,6 @@ roles:
   - cluster1.osd.0
   - cluster1.osd.1
   - cluster1.osd.2
-  - cluster1.client.0
-  - cluster2.client.0
 - - cluster2.mon.a
   - cluster2.mgr.x
   - cluster2.osd.0

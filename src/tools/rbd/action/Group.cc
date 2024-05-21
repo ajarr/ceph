@@ -653,10 +653,9 @@ int execute_group_snap_list(const po::variables_map &vm,
   }
 
   librbd::RBD rbd;
-  std::vector<librbd::group_snap_info_t> snaps;
+  std::vector<librbd::group_snap_info_v2_t> snaps;
 
-  r = rbd.group_snap_list(io_ctx, group_name.c_str(), &snaps,
-                          sizeof(librbd::group_snap_info_t));
+  r = rbd.group_snap_list2(io_ctx, group_name.c_str(), &snaps);
 
   if (r == -ENOENT) {
     r = 0;
@@ -669,11 +668,13 @@ int execute_group_snap_list(const po::variables_map &vm,
   if (f) {
     f->open_array_section("group_snaps");
   } else {
+    t.define_column("ID", TextTable::LEFT, TextTable::LEFT);
     t.define_column("NAME", TextTable::LEFT, TextTable::LEFT);
     t.define_column("STATUS", TextTable::LEFT, TextTable::RIGHT);
   }
 
   for (auto i : snaps) {
+    std::string snap_id = i.id;
     std::string snap_name = i.name;
     int state = i.state;
     std::string state_string;
@@ -687,11 +688,12 @@ int execute_group_snap_list(const po::variables_map &vm,
     }
     if (f) {
       f->open_object_section("group_snap");
+      f->dump_string("id", snap_id);
       f->dump_string("snapshot", snap_name);
       f->dump_string("state", state_string);
       f->close_section();
     } else {
-      t << snap_name << state_string << TextTable::endrow;
+      t << snap_id << snap_name << state_string << TextTable::endrow;
     }
   }
 

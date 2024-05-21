@@ -1223,9 +1223,29 @@ int Group<I>::snap_list(librados::IoCtx& group_ioctx, const char *group_name,
   for (auto snap : cls_snaps) {
     snaps->push_back(
 	group_snap_info_t {
-	   snap.name,
-	   static_cast<group_snap_state_t>(snap.state)});
+          snap.name,
+          static_cast<group_snap_state_t>(snap.state)});
+  }
+  return 0;
+}
 
+template <typename I>
+int Group<I>::snap_list(librados::IoCtx& group_ioctx, const char *group_name,
+			std::vector<group_snap_info_v2_t> *snaps)
+{
+  std::vector<cls::rbd::GroupSnapshot> cls_snaps;
+
+  int r = group_snap_list(group_ioctx, group_name, &cls_snaps);
+  if (r < 0) {
+    return r;
+  }
+
+  for (auto snap : cls_snaps) {
+    snaps->push_back(
+	group_snap_info_v2_t {
+          snap.id,
+          snap.name,
+          static_cast<group_snap_state_t>(snap.state)});
   }
   return 0;
 }

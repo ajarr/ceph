@@ -255,6 +255,13 @@ typedef struct {
 } rbd_group_snap_info_t;
 
 typedef struct {
+  char *id;
+  char *name;
+  rbd_group_snap_state_t state;
+  rbd_snap_namespace_type_t unused;
+} rbd_group_snap_info_v2_t;
+
+typedef struct {
   int64_t group_pool;
   char *group_name;
   char *group_snap_name;
@@ -1476,6 +1483,12 @@ CEPH_RBD_API int rbd_group_snap_list(rados_ioctx_t group_p,
 CEPH_RBD_API int rbd_group_snap_list_cleanup(rbd_group_snap_info_t *snaps,
                                              size_t group_snap_info_size,
                                              size_t num_entries);
+CEPH_RBD_API int rbd_group_snap_list2(rados_ioctx_t group_p,
+                                      const char *group_name,
+                                      rbd_group_snap_info_v2_t *snaps,
+                                      size_t *num_entries);
+CEPH_RBD_API int rbd_group_snap_list2_cleanup(rbd_group_snap_info_v2_t *snaps,
+                                              size_t num_entries);
 CEPH_RBD_API int rbd_group_snap_rollback(rados_ioctx_t group_p,
                                          const char *group_name,
                                          const char *snap_name);

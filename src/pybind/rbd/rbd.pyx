@@ -2763,7 +2763,7 @@ cdef class Group(object):
 
     def list_snaps(self):
         """
-        Iterate over the images of a group.
+        Iterate over the snapshots of a group.
 
         :returns: :class:`GroupSnapIterator`
         """
@@ -5884,7 +5884,7 @@ cdef class GroupSnapIterator(object):
     * ``state`` (int) - state of the snapshot
     """
 
-    cdef rbd_group_snap_info_t *snaps
+    cdef rbd_group_snap_info_v2_t *snaps
     cdef size_t num_snaps
     cdef object group
 
@@ -5893,13 +5893,12 @@ cdef class GroupSnapIterator(object):
         self.snaps = NULL
         self.num_snaps = 10
         while True:
-            self.snaps = <rbd_group_snap_info_t*>realloc_chk(self.snaps,
-                                                             self.num_snaps *
-                                                             sizeof(rbd_group_snap_info_t))
+            self.snaps = <rbd_group_snap_info_v2_t*>realloc_chk(self.snaps,
+                                                                self.num_snaps *
+                                                                sizeof(rbd_group_snap_info_v2_t))
             with nogil:
-                ret = rbd_group_snap_list(group._ioctx, group._name, self.snaps,
-                                          sizeof(rbd_group_snap_info_t),
-                                          &self.num_snaps)
+                ret = rbd_group_snap_list2(group._ioctx, group._name, self.snaps,
+                                           &self.num_snaps)
 
             if ret >= 0:
                 break
@@ -5909,13 +5908,13 @@ cdef class GroupSnapIterator(object):
     def __iter__(self):
         for i in range(self.num_snaps):
             yield {
+                'id'  : decode_cstr(self.snaps[i].id),
                 'name'  : decode_cstr(self.snaps[i].name),
                 'state' : self.snaps[i].state,
                 }
 
     def __dealloc__(self):
         if self.snaps:
-            rbd_group_snap_list_cleanup(self.snaps,
-                                        sizeof(rbd_group_snap_info_t),
-                                        self.num_snaps)
+            rbd_group_snap_list2_cleanup(self.snaps,
+                                         self.num_snaps)
             free(self.snaps)

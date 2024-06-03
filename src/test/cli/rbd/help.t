@@ -52,6 +52,7 @@
       group remove (group rm)           Delete a group.
       group rename                      Rename a group within pool.
       group snap create                 Make a snapshot of a group.
+      group snap info                   Show information about a group snapshot.
       group snap list (... ls)          List snapshots of a group.
       group snap remove (... rm)        Remove a snapshot from a group.
       group snap rename                 Rename group's snapshot.
@@ -1029,7 +1030,7 @@
     --dest-group arg     destination group name
   
   rbd help group snap create
-  usage: rbd group snap create [--pool <pool>] [--namespace <namespace>] 
+  usage: rbd group snap create [--pool <pool>] [--namespace <namespace>]
                                [--group <group>] [--snap <snap>] 
                                [--skip-quiesce] [--ignore-quiesce-error] 
                                <group-snap-spec> 
@@ -1048,6 +1049,24 @@
     --snap arg              snapshot name
     --skip-quiesce          do not run quiesce hooks
     --ignore-quiesce-error  ignore quiesce hook error
+
+  rbd help group snap info
+  usage: rbd group snap info [--pool <pool>] [--namespace <namespace>]
+                             [--group <group>] [--snap <snap>]
+                             <group-snap-spec>
+
+  Show information about a group snapshot.
+
+  Positional arguments
+    <group-snap-spec>       group specification
+                            (example:
+                            [<pool-name>/[<namespace>/]]<group-name>@<snap-name>)
+
+  Optional arguments
+    -p [ --pool ] arg       pool name
+    --namespace arg         namespace name
+    --group arg             group name
+    --snap arg              snapshot name
   
   rbd help group snap list
   usage: rbd group snap list [--format <format>] [--pretty-format] 

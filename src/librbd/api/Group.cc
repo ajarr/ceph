@@ -1251,6 +1251,68 @@ int Group<I>::snap_list(librados::IoCtx& group_ioctx, const char *group_name,
 }
 
 template <typename I>
+int Group<I>::snap_info(librados::IoCtx& group_ioctx, const char *group_name,
+                        const char *snap_name,
+                        group_snap_info_v2_t *group_snap,
+                        std::vector<group_image_snap_info_t> *image_snaps)
+{
+  std::vector<cls::rbd::GroupSnapshot> cls_group_snaps;
+
+  int r = group_snap_list(group_ioctx, group_name, &cls_group_snaps);
+  if (r < 0) {
+    return r;
+  }
+
+  cls::rbd::GroupSnapshot *cls_group_snap = nullptr;
+  for (auto &i : cls_group_snaps) {
+    if (i.name == snap_name) {
+      cls_group_snap = &i;
+      break;
+    }
+  }
+  if (cls_group_snap == nullptr) {
+    return -ENOENT;
+  }
+
+  group_snap->id = cls_group_snap->id;
+  group_snap->name = cls_group_snap->name;
+  group_snap->state = static_cast<group_snap_state_t>(cls_group_snap->state);
+
+  CephContext *cct = (CephContext *)group_ioctx.cct();
+  string group_id;
+
+  r = cls_client::dir_get_id(&group_ioctx, RBD_GROUP_DIRECTORY, group_name,
+                             &group_id);
+  if (r < 0) {
+    lderr(cct) << "error reading group id object: " << cpp_strerror(r)
+               << dendl;
+    return r;
+  }
+
+  std::string img_snap_name = calc_ind_image_snap_name(group_ioctx.get_id(),
+                                                       group_id,
+                                                       group_snap->id);
+
+  for (const auto &i : cls_group_snap->snaps) {
+    std::string image_name;
+    r = cls_client::dir_get_name(&group_ioctx, RBD_DIRECTORY,
+				 i.image_id, &image_name);
+    if (r < 0) {
+      return r;
+    }
+    image_snaps->push_back(
+      group_image_snap_info_t {
+        image_name,
+        img_snap_name,
+        i.pool,
+        i.snap_id,
+      });
+  }
+
+  return 0;
+}
+
+template <typename I>
 int Group<I>::snap_rollback(librados::IoCtx& group_ioctx,
                             const char *group_name, const char *snap_name,
                             ProgressContext& pctx)

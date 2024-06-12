@@ -2634,6 +2634,7 @@ cdef class Group(object):
         name = cstr(name, 'name')
         self.name = name
 
+        self.ioctx = ioctx
         self._ioctx = convert_ioctx(ioctx)
         self._name = name
 
@@ -2738,6 +2739,61 @@ cdef class Group(object):
             ret = rbd_group_snap_remove(self._ioctx, self._name, _snap_name)
         if ret != 0:
             raise make_ex(ret, 'error removing group snapshot', group_errno_to_exception)
+
+    def show_snap(self, snap_name):
+        """
+        Show information about a group snapshot.
+
+        :param snap_name: the name of the snapshot to remove
+        :type name: str
+
+        :raises: :class:`ObjectNotFound`
+        :raises: :class:`InvalidArgument`
+        :raises: :class:`FunctionNotSupported`
+        """
+        snap_name = cstr(snap_name, 'snap_name')
+        cdef:
+            char *_snap_name = snap_name
+            rbd_group_snap_info_v2_t c_group_snap
+            rbd_group_image_snap_info_t *c_image_snaps = NULL
+            size_t num_image_snaps = 10
+        c_group_snap.id = NULL
+        c_group_snap.name = NULL
+        try:
+            while True:
+                c_image_snaps = <rbd_group_image_snap_info_t*>realloc_chk(
+                    c_image_snaps,
+                    num_image_snaps * sizeof(rbd_group_image_snap_info_t))
+                with nogil:
+                    ret = rbd_group_snap_info(self._ioctx, self._name, _snap_name,
+                                              &c_group_snap, c_image_snaps,
+                                              &num_image_snaps)
+                if ret >= 0:
+                    break
+                elif ret != -errno.ERANGE:
+                    raise make_ex(ret,
+                                  'error showing a group snapshot',
+                                  group_errno_to_exception)
+            image_snaps_list = []
+            for i in range(num_image_snaps):
+                img_snap = {
+                    'pool_id': c_image_snaps[i].pool_id,
+                    'namespace': self.ioctx.get_namespace(),
+                    'image_name': decode_cstr(c_image_snaps[i].image_name),
+                    'snap_name': decode_cstr(c_image_snaps[i].snap_name),
+                    'snap_id': c_image_snaps[i].snap_id
+                    }
+                image_snaps_list.append(img_snap)
+            state = c_group_snap.state
+            return {
+                'id': decode_cstr(c_group_snap.id),
+                'name': decode_cstr(c_group_snap.name),
+                'state': state,
+                'images': image_snaps_list
+                }
+        finally:
+            rbd_group_snap_info_cleanup(&c_group_snap, c_image_snaps,
+                                        num_image_snaps)
 
     def rename_snap(self, old_snap_name, new_snap_name):
         """

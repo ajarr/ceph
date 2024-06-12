@@ -1048,7 +1048,28 @@
     --snap arg              snapshot name
     --skip-quiesce          do not run quiesce hooks
     --ignore-quiesce-error  ignore quiesce hook error
+
+  rbd help group snap info
+  usage: rbd group snap info [--format <format>] [--pretty-format]
+                             [--pool <pool>] [--namespace <namespace>]
+                             [--group <group>] [--snap <snap>]
+                             <group-snap-spec>
+
+  Show information about a group snapshot.
+
+  Positional arguments
+    <group-snap-spec>       group specification
+                            (example:
+                            [<pool-name>/[<namespace>/]]<group-name>@<snap-name>)
   
+  Optional arguments
+    -p [ --pool ] arg       pool name
+    --namespace arg         namespace name
+    --group arg             group name
+    --snap arg              snapshot name
+    --format arg            output format (plain, json, or xml) [default: plain]
+    --pretty-format         pretty formatting (json and xml)
+
   rbd help group snap list
   usage: rbd group snap list [--format <format>] [--pretty-format] 
                              [--pool <pool>] [--namespace <namespace>] 

@@ -226,6 +226,12 @@ cdef extern from "rbd/librbd.h" nogil:
         rbd_group_snap_state_t state
         rbd_snap_namespace_type_t unused
 
+    ctypedef struct rbd_group_image_snap_info_t:
+        char *image_name
+        char *snap_name
+        int64_t pool_id
+        uint64_t snap_id
+
     ctypedef enum rbd_image_migration_state_t:
         _RBD_IMAGE_MIGRATION_STATE_UNKNOWN "RBD_IMAGE_MIGRATION_STATE_UNKNOWN"
         _RBD_IMAGE_MIGRATION_STATE_ERROR "RBD_IMAGE_MIGRATION_STATE_ERROR"
@@ -696,6 +702,14 @@ cdef extern from "rbd/librbd.h" nogil:
                              size_t *snaps_size)
     void rbd_group_snap_list2_cleanup(rbd_group_snap_info_v2_t *snaps,
                                       size_t len)
+
+    int rbd_group_snap_info(
+        rados_ioctx_t group_p, const char *group_name, const char *snap_name,
+        rbd_group_snap_info_v2_t *group_snap,
+        rbd_group_image_snap_info_t *image_snaps, size_t *num_image_snaps)
+    void rbd_group_snap_info_cleanup(
+        rbd_group_snap_info_v2_t *group_snap,
+        rbd_group_image_snap_info_t *image_snaps, size_t num_image_snaps)
 
     int rbd_group_snap_rollback(rados_ioctx_t group_p, const char *group_name,
                                 const char *snap_name)

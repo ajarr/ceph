@@ -881,20 +881,17 @@ cdef nogil:
         pass
     int rbd_group_snap_list2(rados_ioctx_t group_p,
                              const char *group_name,
-                             rbd_group_snap_info_v2_t *snaps,
+                             rbd_group_snap_info2_t *snaps,
                              size_t *snaps_size):
         pass
-    void rbd_group_snap_list2_cleanup(rbd_group_snap_info_v2_t *snaps,
+    void rbd_group_snap_list2_cleanup(rbd_group_snap_info2_t *snaps,
                                       size_t len):
         pass
-    int rbd_group_snap_info(
-        rados_ioctx_t group_p, const char *group_name, const char *snap_name,
-        rbd_group_snap_info_v2_t *group_snap,
-        rbd_group_image_snap_info_t *image_snaps, size_t *num_image_snaps):
+    int rbd_group_snap_get_info(rados_ioctx_t group_p, const char *group_name,
+                                const char *snap_name,
+                                rbd_group_snap_info2_t *group_snap):
         pass
-    void rbd_group_snap_info_cleanup(
-        rbd_group_snap_info_v2_t *group_snap,
-        rbd_group_image_snap_info_t *image_snaps, size_t num_image_snaps):
+    void rbd_group_snap_get_info_cleanup(rbd_group_snap_info_v2_t *group_snap):
         pass
     int rbd_group_snap_rollback(rados_ioctx_t group_p, const char *group_name,
                                 const char *snap_name):

@@ -653,7 +653,7 @@ int execute_group_snap_list(const po::variables_map &vm,
   }
 
   librbd::RBD rbd;
-  std::vector<librbd::group_snap_info_v2_t> snaps;
+  std::vector<librbd::group_snap_info2_t> snaps;
 
   r = rbd.group_snap_list2(io_ctx, group_name.c_str(), &snaps);
 
@@ -673,7 +673,7 @@ int execute_group_snap_list(const po::variables_map &vm,
     t.define_column("STATUS", TextTable::LEFT, TextTable::RIGHT);
   }
 
-  for (auto i : snaps) {
+  for (const auto &i : snaps) {
     std::string snap_id = i.id;
     std::string snap_name = i.name;
     int state = i.state;
@@ -737,11 +737,10 @@ int execute_group_snap_info(const po::variables_map &vm,
   }
 
   librbd::RBD rbd;
-  librbd::group_snap_info_v2_t group_snap;
-  std::vector<librbd::group_image_snap_info_t> group_image_snaps;
+  librbd::group_snap_info2_t group_snap;
 
-  r = rbd.group_snap_info(io_ctx, group_name.c_str(), group_snap_name.c_str(),
-                          &group_snap, &group_image_snaps);
+  r = rbd.group_snap_get_info(io_ctx, group_name.c_str(),
+                              group_snap_name.c_str(), &group_snap);
 
   if (r < 0) {
     std::cerr << "rbd: failed to show group snapshot: "
@@ -761,13 +760,14 @@ int execute_group_snap_info(const po::variables_map &vm,
     f->open_object_section("group_snapshot");
     f->dump_string("id", group_snap.id);
     f->dump_string("name", group_snap.name);
+    f->dump_string("image_snap_name", group_snap.image_snap_name);
     f->dump_string("state", state_string);
   } else {
     std::cout << "rbd group snapshot '" << group_snap.name << "':\n"
               << "\tid: " << group_snap.id << std::endl
               << "\tstate: " << state_string << std::endl;
-    if(!group_image_snaps.empty()){
-      std::cout << "\timage snap: " << group_image_snaps.front().snap_name
+    if(!group_snap.image_snap_name.empty()){
+      std::cout << "\timage snap: " << group_snap.image_snap_name
                 << std::endl;
     }
   }
@@ -778,7 +778,7 @@ int execute_group_snap_info(const po::variables_map &vm,
     std::cout << "\timages:" << std::endl;
   }
 
-  for (auto i : group_image_snaps) {
+  for (const auto &i : group_snap.image_snaps) {
     r = rados.pool_reverse_lookup(i.pool_id, &pool_name);
     if (r < 0) {
       std::cerr << "error looking up pool name for pool_id=" << i.pool_id
@@ -788,9 +788,7 @@ int execute_group_snap_info(const po::variables_map &vm,
     if (f) {
       f->open_object_section("image");
       f->dump_string("pool_name", pool_name);
-      f->dump_string("namespace", io_ctx.get_namespace());
       f->dump_string("image_name", i.image_name);
-      f->dump_string("snap_name", i.snap_name);
       f->dump_int("snap_id", i.snap_id);
       f->close_section();
     } else {

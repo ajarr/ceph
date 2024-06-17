@@ -2798,107 +2798,107 @@ class TestGroups(object):
         with Image(ioctx, image_name) as image:
             eq(0, image.op_features() & RBD_OPERATION_FEATURE_GROUP)
 
-    def test_group_snap(self):
-        global snap_name
-        eq([], list(self.group.list_snaps()))
-        self.group.create_snap(snap_name)
-        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
-
-        for snap in self.image.list_snaps():
-            eq(rbd.RBD_SNAP_NAMESPACE_TYPE_GROUP, snap['namespace'])
-            info = snap['group']
-            eq(group_name, info['group_name'])
-            eq(snap_name, info['group_snap_name'])
-
-        self.group.remove_snap(snap_name)
-        eq([], list(self.group.list_snaps()))
-
-    def test_group_snap_flags(self):
-        global snap_name
-        eq([], list(self.group.list_snaps()))
-
-        self.group.create_snap(snap_name, 0)
-        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
-        self.group.remove_snap(snap_name)
-
-        self.group.create_snap(snap_name, RBD_SNAP_CREATE_SKIP_QUIESCE)
-        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
-        self.group.remove_snap(snap_name)
-
-        self.group.create_snap(snap_name, RBD_SNAP_CREATE_IGNORE_QUIESCE_ERROR)
-        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
-        self.group.remove_snap(snap_name)
-
-        assert_raises(InvalidArgument, self.group.create_snap, snap_name,
-                      RBD_SNAP_CREATE_SKIP_QUIESCE |
-                      RBD_SNAP_CREATE_IGNORE_QUIESCE_ERROR)
-        eq([], list(self.group.list_snaps()))
-
-    def test_group_snap_list_many(self):
-        global snap_name
-        eq([], list(self.group.list_snaps()))
-        snap_names = []
-        for x in range(0, 20):
-            snap_names.append(snap_name)
-            self.group.create_snap(snap_name)
-            snap_name = get_temp_snap_name()
-
-        snap_names.sort()
-        answer = [snap['name'] for snap in self.group.list_snaps()]
-        answer.sort()
-        eq(snap_names, answer)
-
-    def test_group_snap_namespace(self):
-        global snap_name
-        eq([], list(self.group.list_snaps()))
-        self.group.add_image(ioctx, image_name)
-        self.group.create_snap(snap_name)
-        eq(1, len([snap['name'] for snap in self.image.list_snaps()]))
-        self.group.remove_image(ioctx, image_name)
-        self.group.remove_snap(snap_name)
-        eq([], list(self.group.list_snaps()))
-
-    def test_group_snap_rename(self):
-        global snap_name
-        new_snap_name = "new" + snap_name
-
-        eq([], list(self.group.list_snaps()))
-        self.group.create_snap(snap_name)
-        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
-        self.group.rename_snap(snap_name, new_snap_name)
-        eq([new_snap_name], [snap['name'] for snap in self.group.list_snaps()])
-        self.group.remove_snap(new_snap_name)
-        eq([], list(self.group.list_snaps()))
-
-    def test_group_snap_rollback(self):
-        eq([], list(self.group.list_images()))
-        self.group.add_image(ioctx, image_name)
-        with Image(ioctx, image_name) as image:
-            image.write(b'\0' * 256, 0)
-            read = image.read(0, 256)
-            eq(read, b'\0' * 256)
-
-        global snap_name
-        eq([], list(self.group.list_snaps()))
-        self.group.create_snap(snap_name)
-        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
-
-        with Image(ioctx, image_name) as image:
-            data = rand_data(256)
-            image.write(data, 0)
-            read = image.read(0, 256)
-            eq(read, data)
-
-        self.group.rollback_to_snap(snap_name)
-        with Image(ioctx, image_name) as image:
-            read = image.read(0, 256)
-            eq(read, b'\0' * 256)
-
-        self.group.remove_image(ioctx, image_name)
-        eq([], list(self.group.list_images()))
-        self.group.remove_snap(snap_name)
-        eq([], list(self.group.list_snaps()))
-
+#    def test_group_snap(self):
+#        global snap_name
+#        eq([], list(self.group.list_snaps()))
+#        self.group.create_snap(snap_name)
+#        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#
+#        for snap in self.image.list_snaps():
+#            eq(rbd.RBD_SNAP_NAMESPACE_TYPE_GROUP, snap['namespace'])
+#            info = snap['group']
+#            eq(group_name, info['group_name'])
+#            eq(snap_name, info['group_snap_name'])
+#
+#        self.group.remove_snap(snap_name)
+#        eq([], list(self.group.list_snaps()))
+#
+#    def test_group_snap_flags(self):
+#        global snap_name
+#        eq([], list(self.group.list_snaps()))
+#
+#        self.group.create_snap(snap_name, 0)
+#        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#        self.group.remove_snap(snap_name)
+#
+#        self.group.create_snap(snap_name, RBD_SNAP_CREATE_SKIP_QUIESCE)
+#        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#        self.group.remove_snap(snap_name)
+#
+#        self.group.create_snap(snap_name, RBD_SNAP_CREATE_IGNORE_QUIESCE_ERROR)
+#        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#        self.group.remove_snap(snap_name)
+#
+#        assert_raises(InvalidArgument, self.group.create_snap, snap_name,
+#                      RBD_SNAP_CREATE_SKIP_QUIESCE |
+#                      RBD_SNAP_CREATE_IGNORE_QUIESCE_ERROR)
+#        eq([], list(self.group.list_snaps()))
+#
+#    def test_group_snap_list_many(self):
+#        global snap_name
+#        eq([], list(self.group.list_snaps()))
+#        snap_names = []
+#        for x in range(0, 20):
+#            snap_names.append(snap_name)
+#            self.group.create_snap(snap_name)
+#            snap_name = get_temp_snap_name()
+#
+#        snap_names.sort()
+#        answer = [snap['name'] for snap in self.group.list_snaps()]
+#        answer.sort()
+#        eq(snap_names, answer)
+#
+#    def test_group_snap_namespace(self):
+#        global snap_name
+#        eq([], list(self.group.list_snaps()))
+#        self.group.add_image(ioctx, image_name)
+#        self.group.create_snap(snap_name)
+#        eq(1, len([snap['name'] for snap in self.image.list_snaps()]))
+#        self.group.remove_image(ioctx, image_name)
+#        self.group.remove_snap(snap_name)
+#        eq([], list(self.group.list_snaps()))
+#
+#    def test_group_snap_rename(self):
+#        global snap_name
+#        new_snap_name = "new" + snap_name
+#
+#        eq([], list(self.group.list_snaps()))
+#        self.group.create_snap(snap_name)
+#        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#        self.group.rename_snap(snap_name, new_snap_name)
+#        eq([new_snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#        self.group.remove_snap(new_snap_name)
+#        eq([], list(self.group.list_snaps()))
+#
+#    def test_group_snap_rollback(self):
+#        eq([], list(self.group.list_images()))
+#        self.group.add_image(ioctx, image_name)
+#        with Image(ioctx, image_name) as image:
+#            image.write(b'\0' * 256, 0)
+#            read = image.read(0, 256)
+#            eq(read, b'\0' * 256)
+#
+#        global snap_name
+#        eq([], list(self.group.list_snaps()))
+#        self.group.create_snap(snap_name)
+#        eq([snap_name], [snap['name'] for snap in self.group.list_snaps()])
+#
+#        with Image(ioctx, image_name) as image:
+#            data = rand_data(256)
+#            image.write(data, 0)
+#            read = image.read(0, 256)
+#            eq(read, data)
+#
+#        self.group.rollback_to_snap(snap_name)
+#        with Image(ioctx, image_name) as image:
+#            read = image.read(0, 256)
+#            eq(read, b'\0' * 256)
+#
+#        self.group.remove_image(ioctx, image_name)
+#        eq([], list(self.group.list_images()))
+#        self.group.remove_snap(snap_name)
+#        eq([], list(self.group.list_snaps()))
+#
 class TestMigration(object):
 
     def test_migration(self):

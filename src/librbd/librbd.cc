@@ -263,18 +263,11 @@ void group_info_cpp_to_c(const librbd::group_info_t &cpp_info,
   c_info->pool = cpp_info.pool;
 }
 
-void group_snap_info_cpp_to_c(const librbd::group_snap_info_t &cpp_info,
-			      rbd_group_snap_info_t *c_info) {
-  c_info->name = strdup(cpp_info.name.c_str());
-  c_info->state = cpp_info.state;
-}
-
-void group_snap_info_v2_cpp_to_c(const librbd::group_snap_info_v2_t &cpp_info,
-                                 rbd_group_snap_info_v2_t *c_info) {
-  c_info->id = strdup(cpp_info.id.c_str());
-  c_info->name = strdup(cpp_info.name.c_str());
-  c_info->state = cpp_info.state;
-}
+//void group_snap_info_cpp_to_c(const librbd::group_snap_info_t &cpp_info,
+//			      rbd_group_snap_info_t *c_info) {
+//  c_info->name = strdup(cpp_info.name.c_str());
+//  c_info->state = cpp_info.state;
+//}
 
 void group_image_snap_info_cpp_to_c(
     const librbd::group_image_snap_info_t &cpp_info,
@@ -282,7 +275,22 @@ void group_image_snap_info_cpp_to_c(
   c_info->pool_id = cpp_info.pool_id;
   c_info->snap_id = cpp_info.snap_id;
   c_info->image_name = strdup(cpp_info.image_name.c_str());
-  c_info->snap_name = strdup(cpp_info.snap_name.c_str());
+}
+
+void group_snap_info2_cpp_to_c(const librbd::group_snap_info2_t &cpp_info,
+                               rbd_group_snap_info2_t *c_info) {
+  c_info->id = strdup(cpp_info.id.c_str());
+  c_info->name = strdup(cpp_info.name.c_str());
+  c_info->image_snap_name = strdup(cpp_info.image_snap_name.c_str());
+  c_info->state = cpp_info.state;
+  c_info->image_snaps_count = cpp_info.image_snaps.size();
+  c_info->image_snaps = (rbd_group_image_snap_info_t*)calloc(
+    cpp_info.image_snaps.size(), sizeof(rbd_group_image_snap_info_t));
+  auto idx = 0U;
+  for (const auto &cpp_image_snap : cpp_info.image_snaps) {
+    group_image_snap_info_cpp_to_c(cpp_image_snap,
+                                   &(c_info->image_snaps[idx++]));
+  }
 }
 
 void mirror_image_info_cpp_to_c(const librbd::mirror_image_info_t &cpp_info,
@@ -1433,24 +1441,32 @@ namespace librbd {
       return -ERANGE;
     }
 
-    int r = librbd::api::Group<>::snap_list(group_ioctx, group_name, snaps);
+    std::vector<group_snap_info2_t> snaps2;
+    int r = librbd::api::Group<>::snap_list(group_ioctx, group_name, &snaps2);
+    for (const auto &i : snaps2) {
+      snaps->push_back(
+        group_snap_info_t {
+          i.name,
+          i.state
+        });
+    }
+
     tracepoint(librbd, group_snap_list_exit, r);
     return r;
   }
 
   int RBD::group_snap_list2(IoCtx& group_ioctx, const char *group_name,
-                            std::vector<group_snap_info_v2_t> *snaps)
+                            std::vector<group_snap_info2_t> *snaps)
   {
 
     return librbd::api::Group<>::snap_list(group_ioctx, group_name, snaps);
   }
 
-  int RBD::group_snap_info(IoCtx& group_ioctx, const char *group_name,
-                           const char *snap_name,
-                           group_snap_info_v2_t *group_snap,
-                           std::vector<group_image_snap_info_t> *image_snaps) {
-    return librbd::api::Group<>::snap_info(group_ioctx, group_name, snap_name,
-                                           group_snap, image_snaps);
+  int RBD::group_snap_get_info(IoCtx& group_ioctx, const char *group_name,
+                               const char *snap_name,
+                               group_snap_info2_t *group_snap) {
+    return librbd::api::Group<>::snap_get_info(group_ioctx, group_name,
+                                               snap_name, group_snap);
   }
 
   int RBD::group_snap_rename(IoCtx& group_ioctx, const char *group_name,
@@ -7178,72 +7194,111 @@ extern "C" int rbd_group_snap_rename(rados_ioctx_t group_p,
   return r;
 }
 
-extern "C" int rbd_group_snap_list(rados_ioctx_t group_p,
-                                   const char *group_name,
-                                   rbd_group_snap_info_t *snaps,
-                                   size_t group_snap_info_size,
-                                   size_t *snaps_size)
-{
+extern "C" int  rbd_group_snap_get_info(
+    rados_ioctx_t group_p, const char *group_name, const char *snap_name,
+    rbd_group_snap_info2_t *group_snap) {
   librados::IoCtx group_ioctx;
   librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
 
-  TracepointProvider::initialize<tracepoint_traits>(get_cct(group_ioctx));
-  tracepoint(librbd, group_snap_list_enter, group_ioctx.get_pool_name().c_str(),
-	     group_ioctx.get_id(), group_name);
-  // FIPS zeroization audit 20191117: this memset is not security related.
-  memset(snaps, 0, sizeof(*snaps) * *snaps_size);
-
-  if (group_snap_info_size != sizeof(rbd_group_snap_info_t)) {
-    *snaps_size = 0;
-    tracepoint(librbd, group_snap_list_exit, -ERANGE);
-    return -ERANGE;
-  }
-
-  std::vector<librbd::group_snap_info_t> cpp_snaps;
-  int r = librbd::api::Group<>::snap_list(group_ioctx, group_name, &cpp_snaps);
-
-  if (r == -ENOENT) {
-    *snaps_size = 0;
-    tracepoint(librbd, group_snap_list_exit, 0);
-    return 0;
-  }
-
+  librbd::group_snap_info2_t cpp_group_snap;
+  int r = librbd::api::Group<>::snap_get_info(group_ioctx, group_name,
+                                              snap_name, &cpp_group_snap);
   if (r < 0) {
-    tracepoint(librbd, group_snap_list_exit, r);
     return r;
   }
-
-  if (*snaps_size < cpp_snaps.size()) {
-    *snaps_size = cpp_snaps.size();
-    tracepoint(librbd, group_snap_list_exit, -ERANGE);
-    return -ERANGE;
-  }
-
-  for (size_t i = 0; i < cpp_snaps.size(); ++i) {
-    group_snap_info_cpp_to_c(cpp_snaps[i], &snaps[i]);
-  }
-
-  r = *snaps_size = cpp_snaps.size();
-  tracepoint(librbd, group_snap_list_exit, r);
-  return r;
+  group_snap_info2_cpp_to_c(cpp_group_snap, group_snap);
+  return 0;
 }
 
-extern "C" int rbd_group_snap_list_cleanup(rbd_group_snap_info_t *snaps,
-                                           size_t group_snap_info_size,
-                                           size_t len) {
-  if (group_snap_info_size != sizeof(rbd_group_snap_info_t)) {
-    return -ERANGE;
+extern "C" int rbd_group_snap_get_info_cleanup(
+    rbd_group_snap_info2_t *group_snap) {
+  if (group_snap->id) {
+    free(group_snap->id);
   }
-
-  for (size_t i = 0; i < len; ++i) {
-    free(snaps[i].name);
+  if (group_snap->name) {
+    free(group_snap->name);
+  }
+  if (group_snap->image_snap_name) {
+    free(group_snap->image_snap_name);
+  }
+  if (group_snap->image_snaps) {
+    for (size_t i = 0; i < group_snap->image_snaps_count; ++i) {
+      if (group_snap->image_snaps[i].image_name) {
+	free(group_snap->image_snaps[i].image_name);
+      }
+    }
+    free(group_snap->image_snaps);
   }
   return 0;
 }
 
+//extern "C" int rbd_group_snap_list(rados_ioctx_t group_p,
+//                                   const char *group_name,
+//                                   rbd_group_snap_info_t *snaps,
+//                                   size_t group_snap_info_size,
+//                                   size_t *snaps_size)
+//{
+//  librados::IoCtx group_ioctx;
+//  librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
+//
+//  TracepointProvider::initialize<tracepoint_traits>(get_cct(group_ioctx));
+//  tracepoint(librbd, group_snap_list_enter, group_ioctx.get_pool_name().c_str(),
+//	     group_ioctx.get_id(), group_name);
+//  // FIPS zeroization audit 20191117: this memset is not security related.
+//  memset(snaps, 0, sizeof(*snaps) * *snaps_size);
+//
+//  if (group_snap_info_size != sizeof(rbd_group_snap_info_t)) {
+//    *snaps_size = 0;
+//    tracepoint(librbd, group_snap_list_exit, -ERANGE);
+//    return -ERANGE;
+//  }
+//
+//  std::vector<librbd::group_snap_info_t> cpp_snaps;
+//  int r = librbd::api::Group<>::snap_list(group_ioctx, group_name, &cpp_snaps);
+//
+//  if (r == -ENOENT) {
+//    *snaps_size = 0;
+//    tracepoint(librbd, group_snap_list_exit, 0);
+//    return 0;
+//  }
+//
+//  if (r < 0) {
+//    tracepoint(librbd, group_snap_list_exit, r);
+//    return r;
+//  }
+//
+//  if (*snaps_size < cpp_snaps.size()) {
+//    *snaps_size = cpp_snaps.size();
+//    tracepoint(librbd, group_snap_list_exit, -ERANGE);
+//    return -ERANGE;
+//  }
+//
+//  for (size_t i = 0; i < cpp_snaps.size(); ++i) {
+//    group_snap_info_cpp_to_c(cpp_snaps[i], &snaps[i]);
+//  }
+//
+//  r = *snaps_size = cpp_snaps.size();
+//  tracepoint(librbd, group_snap_list_exit, r);
+//  return r;
+//}
+//
+//extern "C" int rbd_group_snap_list_cleanup(rbd_group_snap_info_t *snaps,
+//                                           size_t group_snap_info_size,
+//                                           size_t len) {
+//  if (group_snap_info_size != sizeof(rbd_group_snap_info_t)) {
+//    return -ERANGE;
+//  }
+//
+//  for (size_t i = 0; i < len; ++i) {
+//    free(snaps[i].name);
+//  }
+//  return 0;
+//}
+//
+
 extern "C" int rbd_group_snap_list2(rados_ioctx_t group_p,
                                     const char *group_name,
-                                    rbd_group_snap_info_v2_t *snaps,
+                                    rbd_group_snap_info2_t *snaps,
                                     size_t *snaps_size)
 {
   librados::IoCtx group_ioctx;
@@ -7252,7 +7307,7 @@ extern "C" int rbd_group_snap_list2(rados_ioctx_t group_p,
   // FIPS zeroization audit 20191117: this memset is not security related.
   memset(snaps, 0, sizeof(*snaps) * *snaps_size);
 
-  std::vector<librbd::group_snap_info_v2_t> cpp_snaps;
+  std::vector<librbd::group_snap_info2_t> cpp_snaps;
   int r = librbd::api::Group<>::snap_list(group_ioctx, group_name, &cpp_snaps);
 
   if (r == -ENOENT) {
@@ -7270,81 +7325,17 @@ extern "C" int rbd_group_snap_list2(rados_ioctx_t group_p,
   }
 
   for (size_t i = 0; i < cpp_snaps.size(); ++i) {
-    group_snap_info_v2_cpp_to_c(cpp_snaps[i], &snaps[i]);
+    group_snap_info2_cpp_to_c(cpp_snaps[i], &snaps[i]);
   }
 
   r = *snaps_size = cpp_snaps.size();
   return r;
 }
 
-extern "C" int rbd_group_snap_list2_cleanup(rbd_group_snap_info_v2_t *snaps,
+extern "C" int rbd_group_snap_list2_cleanup(rbd_group_snap_info2_t *snaps,
                                             size_t len) {
   for (size_t i = 0; i < len; ++i) {
-    free(snaps[i].id);
-    free(snaps[i].name);
-  }
-  return 0;
-}
-
-extern "C" int  rbd_group_snap_info(
-    rados_ioctx_t group_p, const char *group_name, const char *snap_name,
-    rbd_group_snap_info_v2_t *group_snap,
-    rbd_group_image_snap_info_t *image_snaps, size_t *num_image_snaps) {
-  librados::IoCtx group_ioctx;
-  librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
-
-  // FIPS zeroization audit 20191117: this memset is not security related.
-  memset(image_snaps, 0, sizeof(*image_snaps) * *num_image_snaps);
-
-  librbd::group_snap_info_v2_t cpp_group_snap;
-  std::vector<librbd::group_image_snap_info_t> cpp_image_snaps;
-  int r = librbd::api::Group<>::snap_info(group_ioctx, group_name, snap_name,
-                                          &cpp_group_snap, &cpp_image_snaps);
-
-  if (r == -ENOENT) {
-    *num_image_snaps = 0;
-    return 0;
-  }
-
-  if (r < 0) {
-    return r;
-  }
-
-  if (*num_image_snaps < cpp_image_snaps.size()) {
-    *num_image_snaps = cpp_image_snaps.size();
-    return -ERANGE;
-  }
-
-  group_snap_info_v2_cpp_to_c(cpp_group_snap, group_snap);
-
-  for (size_t i = 0; i < cpp_image_snaps.size(); ++i) {
-    group_image_snap_info_cpp_to_c(cpp_image_snaps[i], &image_snaps[i]);
-  }
-
-  r = *num_image_snaps = cpp_image_snaps.size();
-  return r;
-}
-
-extern "C" int rbd_group_snap_info_cleanup(
-    rbd_group_snap_info_v2_t *group_snap,
-    rbd_group_image_snap_info_t *image_snaps,
-    size_t num_image_snaps) {
-  if (group_snap->id) {
-    free(group_snap->id);
-  }
-  if (group_snap->name) {
-    free(group_snap->name);
-  }
-  if (image_snaps) {
-    for (size_t i = 0; i < num_image_snaps; ++i) {
-      if(image_snaps[i].image_name) {
-        free(image_snaps[i].image_name);
-      }
-      if(image_snaps[i].snap_name) {
-        free(image_snaps[i].snap_name);
-      }
-    }
-    free(image_snaps);
+    rbd_group_snap_get_info_cleanup(&snaps[i]);
   }
   return 0;
 }

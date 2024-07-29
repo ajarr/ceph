@@ -502,6 +502,9 @@ public:
                               size_t status_size);
   int mirror_group_get_instance_id(IoCtx& io_ctx, const char *group_name,
                                    std::string *instance_id);
+  int aio_mirror_group_get_info(IoCtx& io_ctx, const char *group_name,
+                                mirror_group_info_t *mirror_group_info,
+                                size_t info_size, RBD::AioCompletion *c);
 
   int namespace_create(IoCtx& ioctx, const char *namespace_name);
   int namespace_remove(IoCtx& ioctx, const char *namespace_name);

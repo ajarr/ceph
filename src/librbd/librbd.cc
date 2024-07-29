@@ -1621,6 +1621,22 @@ namespace librbd {
                                                  mirror_group_info);
   }
 
+  int RBD::aio_mirror_group_get_info(IoCtx& group_ioctx,
+                                     const char* group_name,
+				     mirror_group_info_t *mirror_group_info,
+				     size_t info_size,
+				     RBD::AioCompletion *c) {
+    if (sizeof(mirror_image_info_t) != info_size) {
+      return -ERANGE;
+    }
+
+    librbd::api::Mirror<>::group_get_info(
+      group_ioctx, group_name, mirror_group_info,
+      new C_AioCompletion(nullptr, librbd::io::AIO_TYPE_GENERIC,
+                          get_aio_completion(c)));
+    return 0;
+  }
+
   int RBD::mirror_group_get_status(IoCtx& group_ioctx, const char *group_name,
                                    mirror_group_global_status_t *status,
                                    size_t status_size) {

@@ -279,6 +279,35 @@ public:
     void release();
   };
 
+  // This must be dynamically allocated with new, and
+  // must be released with release().
+  // Do not use delete.
+  struct AioGroupCompletion {
+    typedef enum {
+      AIO_STATE_PENDING = 0,
+      AIO_STATE_CALLBACK,
+      AIO_STATE_COMPLETE,
+    } aio_state_t;
+    std::atomic<aio_state_t> m_state{AIO_STATE_PENDING};
+
+    void *m_complete_arg = nullptr;
+    callback_t m_complete_cb = nullptr;
+    std::atomic<ssize_t> m_rval{0};
+    IoCtx *m_ioctx = nullptr;
+
+    mutable std::mutex m_lock;
+    std::condition_variable m_cond;
+
+    AioGroupCompletion(void *cb_arg, callback_t complete_cb);
+
+    ssize_t get_return_value();
+    void release();
+    void complete();
+    void fail(int r);
+    int wait_for_complete();
+    void init(IoCtx *ioctx);
+  };
+
   void version(int *major, int *minor, int *extra);
 
   int open(IoCtx& io_ctx, Image& image, const char *name);

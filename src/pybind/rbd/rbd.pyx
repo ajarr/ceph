@@ -532,6 +532,90 @@ cdef class Completion(object):
             self.persisted = False
 
 
+cdef class GroupCompletion
+
+cdef void __aio_group_complete_cb(rbd_completion_t completion, void *args) with gil:
+    """
+    Callback to oncomplete() for asynchronous operations
+    """
+    cdef GroupCompletion group_cb = <GroupCompletion>args
+    group_cb._complete()
+
+
+cdef class GroupCompletion(object):
+    """group completion object"""
+
+    cdef:
+        object oncomplete
+        rbd_completion_t rbd_comp
+        PyObject* buf
+        bint persisted
+        object exc_info
+
+    def __cinit__(self, object oncomplete):
+        self.oncomplete = oncomplete
+        self.persisted = False
+
+    def get_return_value(self):
+        """
+        Get the return value of an asynchronous operation
+
+        The return value is set when the operation is complete.
+
+        :returns: int - return value of the operation
+        """
+        with nogil:
+          ret = rbd_aio_get_return_value_group_completion(self.rbd_comp)
+        return ret
+
+    def __dealloc__(self):
+        """
+        Release a group completion
+
+        This is automatically called when the group completion object is freed.
+        """
+        ref.Py_XDECREF(self.buf)
+        self.buf = NULL
+        if self.rbd_comp != NULL:
+            with nogil:
+                rbd_aio_release_group_completion(self.rbd_comp)
+                self.rbd_comp = NULL
+
+    cdef void _complete(self):
+        try:
+            self.__unpersist()
+            if self.oncomplete:
+                self.oncomplete(self)
+        except:
+            self.exc_info = sys.exc_info()
+
+    cdef __persist(self):
+        if self.oncomplete is not None and not self.persisted:
+            ref.Py_INCREF(self)
+            self.persisted = True
+
+    cdef __unpersist(self):
+        if self.persisted:
+            ref.Py_DECREF(self)
+            self.persisted = False
+
+    def wait_for_complete_and_cb(self):
+        """
+        Wait for an asynchronous operation to complete
+
+        This method waits for the callback to execute, if one was provided.
+        It will also re-raise any exceptions raised by the callback. You
+        should call this to "reap" asynchronous completions and ensure that
+        any exceptions in the callbacks are handled, as an exception internal
+        to this module may have occurred.
+        """
+        with nogil:
+            rbd_aio_wait_for_complete_group_completion(self.rbd_comp)
+
+        if self.exc_info:
+            raise self.exc_info[0], self.exc_info[1], self.exc_info[2]
+
+
 class RBD(object):
     """
     This class wraps librbd CRUD functions.
@@ -2637,6 +2721,31 @@ cdef class Group(object):
     def __exit__(self, type_, value, traceback):
         return False
 
+    def __get_group_completion(self, oncomplete):
+        """
+        Constructs a completion to use with asynchronous operations
+
+        :param oncomplete: callback for the completion
+
+        :raises: :class:`Error`
+        :returns: completion object
+        """
+
+        completion_obj = GroupCompletion(oncomplete)
+        cdef:
+            PyObject* p_completion_obj= <PyObject*>completion_obj
+            rbd_completion_t completion
+
+        with nogil:
+            ret = rbd_aio_create_group_completion(p_completion_obj,
+                                                  __aio_group_complete_cb,
+                                                  &completion)
+        if ret < 0:
+            raise make_ex(ret, "error getting a completion")
+
+        completion_obj.rbd_comp = completion
+        return completion_obj
+
     def add_image(self, image_ioctx, image_name, flags=0):
         """
         Add an image to a group.
@@ -2847,6 +2956,59 @@ cdef class Group(object):
             }
         rbd_mirror_group_get_info_cleanup(&c_info)
         return info
+
+    def aio_mirror_group_get_info(self, oncomplete):
+        """
+         Asynchronously get mirror info of the group.
+
+        oncomplete will be called with the returned info as
+        well as the completion:
+
+        oncomplete(completion, info)
+
+        :param oncomplete: what to do when get info is complete
+        :type oncomplete: completion
+        :returns: :class:`Completion` - the completion object
+        """
+        cdef:
+            GroupCompletion completion
+
+        def oncomplete_(completion_v):
+            cdef:
+                GroupCompletion _completion_v = completion_v
+                rbd_mirror_group_info_t *c_info
+            return_value = _completion_v.get_return_value()
+            if return_value == 0:
+                c_info = <rbd_mirror_group_info_t *>_completion_v.buf
+                info = {
+                    'global_id'  : decode_cstr(c_info[0].global_id),
+                    'image_mode' : int(c_info[0].mirror_image_mode),
+                    'state'      : int(c_info[0].state),
+                    'primary'    : c_info[0].primary,
+                }
+                rbd_mirror_group_get_info_cleanup(c_info)
+            else:
+                info = None
+            return oncomplete(_completion_v, info)
+
+        completion = self.__get_group_completion(oncomplete_)
+        completion.buf = PyBytes_FromStringAndSize(
+            NULL, sizeof(rbd_mirror_group_info_t))
+        try:
+            completion.__persist()
+            with nogil:
+                ret = rbd_aio_mirror_group_get_info(
+                    self._ioctx, self._name,
+                    <rbd_mirror_group_info_t *>completion.buf,
+                    sizeof(rbd_mirror_group_info_t), completion.rbd_comp)
+            if ret != 0:
+                raise make_ex(
+                    ret, 'error getting mirror info of group %s' % self._name)
+        except:
+            completion.__unpersist()
+            raise
+
+        return completion
 
 def requires_not_closed(f):
     def wrapper(self, *args, **kwargs):

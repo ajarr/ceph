@@ -600,15 +600,6 @@ cdef class GroupCompletion(object):
             self.persisted = False
 
     def wait_for_complete_and_cb(self):
-        """
-        Wait for an asynchronous operation to complete
-
-        This method waits for the callback to execute, if one was provided.
-        It will also re-raise any exceptions raised by the callback. You
-        should call this to "reap" asynchronous completions and ensure that
-        any exceptions in the callbacks are handled, as an exception internal
-        to this module may have occurred.
-        """
         with nogil:
             rbd_aio_wait_for_complete_group_completion(self.rbd_comp)
 

@@ -23,6 +23,11 @@
 #include "../rados/librados.hpp"
 #include "librbd.h"
 
+#include <atomic>
+#include <condition_variable>
+
+#include "../librbd/AsioEngine.h"
+
 #if __GNUC__ >= 4
   #pragma GCC diagnostic push
   #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -293,7 +298,8 @@ public:
     void *m_complete_arg = nullptr;
     callback_t m_complete_cb = nullptr;
     std::atomic<ssize_t> m_rval{0};
-    IoCtx *m_ioctx = nullptr;
+    IoCtx m_ioctx;
+    std::shared_ptr<AsioEngine> m_asio_engine;
 
     mutable std::mutex m_lock;
     std::condition_variable m_cond;
@@ -301,11 +307,12 @@ public:
     AioGroupCompletion(void *cb_arg, callback_t complete_cb);
 
     ssize_t get_return_value();
+    void notify_complete();
     void release();
     void complete();
     void fail(int r);
     int wait_for_complete();
-    void init(IoCtx *ioctx);
+    void init(IoCtx& ioctx);
   };
 
   void version(int *major, int *minor, int *extra);
@@ -533,7 +540,7 @@ public:
                                    std::string *instance_id);
   int aio_mirror_group_get_info(IoCtx& io_ctx, const char *group_name,
                                 mirror_group_info_t *mirror_group_info,
-                                size_t info_size, RBD::AioCompletion *c);
+                                size_t info_size, RBD::AioGroupCompletion *c);
 
   int namespace_create(IoCtx& ioctx, const char *namespace_name);
   int namespace_remove(IoCtx& ioctx, const char *namespace_name);

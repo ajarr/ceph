@@ -58,7 +58,7 @@ private:
    * @endverbatim
    */
 
-  librados::IoCtx& m_group_ioctx;
+  librados::IoCtx m_group_ioctx;
   const std::string m_group_name;
   std::string m_group_id;
   mirror_group_info_t *m_mirror_group_info;

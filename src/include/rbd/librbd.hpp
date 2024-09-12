@@ -310,6 +310,7 @@ public:
     void notify_complete();
     void release();
     void complete();
+    bool is_complete();
     void fail(int r);
     int wait_for_complete();
     void init(IoCtx& ioctx);

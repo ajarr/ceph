@@ -1819,6 +1819,12 @@ namespace librbd {
       });
   }
 
+  bool RBD::AioGroupCompletion::is_complete()
+  {
+    bool done = (m_state != AIO_STATE_PENDING);
+    return done;
+  }
+
   void RBD::AioGroupCompletion::notify_complete()
   {
     m_state = AIO_STATE_COMPLETE;
@@ -7288,6 +7294,18 @@ extern "C" int rbd_aio_create_group_completion(void *cb_arg,
   return 0;
 }
 
+extern "C" int rbd_aio_is_complete_group_completion(rbd_completion_t c)
+{
+  librbd::RBD::AioGroupCompletion *comp = (librbd::RBD::AioGroupCompletion *)c;
+  return comp->is_complete();
+}
+
+extern "C" int rbd_aio_wait_for_complete_group_completion(rbd_completion_t c)
+{
+  librbd::RBD::AioGroupCompletion *comp = (librbd::RBD::AioGroupCompletion *)c;
+  return comp->wait_for_complete();
+}
+
 extern "C" ssize_t rbd_aio_get_return_value_group_completion(
     rbd_completion_t c)
 {
@@ -7299,12 +7317,6 @@ extern "C" void rbd_aio_release_group_completion(rbd_completion_t c)
 {
   librbd::RBD::AioGroupCompletion *comp = (librbd::RBD::AioGroupCompletion *)c;
   comp->release();
-}
-
-extern "C" int rbd_aio_wait_for_complete_group_completion(rbd_completion_t c)
-{
-  librbd::RBD::AioGroupCompletion *comp = (librbd::RBD::AioGroupCompletion *)c;
-  return comp->wait_for_complete();
 }
 
 extern "C" int rbd_group_create(rados_ioctx_t p, const char *name)

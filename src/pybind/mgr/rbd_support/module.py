@@ -91,6 +91,7 @@ class Module(MgrModule):
 
     def init_handlers(self) -> None:
         self.mirror_snapshot_schedule = MirrorSnapshotScheduleHandler(self)
+        # TODO MGSS self.mirror_group_snapshot_schedule = MirrorSnapshotScheduleHandler(self)
         self.perf = PerfHandler(self)
         self.task = TaskHandler(self)
         self.trash_purge_schedule = TrashPurgeScheduleHandler(self)
@@ -101,6 +102,7 @@ class Module(MgrModule):
         # implicitly here as 'rados' is a property attribute.
         self.rados.wait_for_latest_osdmap()
         self.mirror_snapshot_schedule.setup()
+        # TODO MGSS self.mirror_group_snapshot_schedule.setup()
         self.perf.setup()
         self.task.setup()
         self.trash_purge_schedule.setup()
@@ -130,6 +132,7 @@ class Module(MgrModule):
     def shutdown(self) -> None:
         self.module_ready = False
         self.mirror_snapshot_schedule.shutdown()
+        # TODO MGSS self.mirror_group_snapshot_schedule.shutdown()
         self.trash_purge_schedule.shutdown()
         self.task.shutdown()
         self.perf.shutdown()
@@ -179,6 +182,51 @@ class Module(MgrModule):
         """
         spec = LevelSpec.from_name(self, level_spec, namespace_validator, image_validator)
         return self.mirror_snapshot_schedule.status(spec)
+    
+#    TODO MGSS
+#    @CLIWriteCommand('rbd mirror group snapshot schedule add')
+#    @with_latest_osdmap
+#    def mirror_group_snapshot_schedule_add(self,
+#                                           level_spec: str,
+#                                           interval: str,
+#                                           start_time: Optional[str] = None) -> Tuple[int, str, str]:
+#        """
+#        Add rbd mirror group snapshot schedule
+#        """
+#        spec = LevelSpec.from_name(self, level_spec, namespace_validator, group_validator=group_validator)
+#        return self.mirror_group_snapshot_schedule.add_schedule(spec, interval, start_time)
+#
+#    @CLIWriteCommand('rbd mirror group snapshot schedule remove')
+#    @with_latest_osdmap
+#    def mirror_group_snapshot_schedule_remove(self,
+#                                              level_spec: str,
+#                                              interval: Optional[str] = None,
+#                                              start_time: Optional[str] = None) -> Tuple[int, str, str]:
+#        """
+#        Remove rbd mirror group snapshot schedule
+#        """
+#        spec = LevelSpec.from_name(self, level_spec, namespace_validator, group_validator=group_validator)
+#        return self.mirror_group_snapshot_schedule.remove_schedule(spec, interval, start_time)
+#
+#    @CLIReadCommand('rbd mirror group snapshot schedule list')
+#    @with_latest_osdmap
+#    def mirror_group_snapshot_schedule_list(self,
+#                                            level_spec: str = '') -> Tuple[int, str, str]:
+#        """
+#        List rbd mirror group snapshot schedules
+#        """
+#        spec = LevelSpec.from_name(self, level_spec, namespace_validator, group_validator=group_validator)
+#        return self.mirror_group_snapshot_schedule.list(spec)
+#
+#    @CLIReadCommand('rbd mirror group snapshot schedule status')
+#    @with_latest_osdmap
+#    def mirror_group_snapshot_schedule_status(self,
+#                                              level_spec: str = '') -> Tuple[int, str, str]:
+#        """
+#        Show rbd mirror group snapshot schedule status
+#        """
+#        spec = LevelSpec.from_name(self, level_spec, namespace_validator, group_validator=group_validator)
+#        return self.mirror_group_snapshot_schedule.status(spec)
 
     @CLIReadCommand('rbd perf image stats')
     @with_latest_osdmap

@@ -21,7 +21,7 @@ def namespace_validator(ioctx: rados.Ioctx) -> None:
 def group_validator(group: rbd.Group) -> None:
     mode = group.mirror_group_get_info()['image_mode']
     if mode != rbd.RBD_MIRROR_IMAGE_MODE_SNAPSHOT:
-        raise rbd.InvalidArgument("Invalid mirror image mode")
+        raise rbd.InvalidArgument("Invalid mirror group mode")
 
 class GroupSpec(NamedTuple):
     pool_id: str
@@ -31,7 +31,7 @@ class GroupSpec(NamedTuple):
 
 class MirrorGroupSnapshotScheduleHandler:
     MODULE_OPTION_NAME = "mirror_group_snapshot_schedule"
-    # MODULE_OPTION_NAME_MAX_CONCURRENT_SNAP_CREATE = "max_concurrent_snap_create"
+    MODULE_OPTION_NAME_MAX_CONCURRENT_SNAP_CREATE = "max_concurrent_snap_create"
     SCHEDULE_OID = "rbd_mirror_group_snapshot_schedule"
     REFRESH_DELAY_SECONDS = 60.0
 
@@ -87,7 +87,7 @@ class MirrorGroupSnapshotScheduleHandler:
             with self.module.rados.open_ioctx2(int(pool_id)) as ioctx:
                 ioctx.set_namespace(namespace)
                 group_name = get_group_name_from_id(ioctx, group_id)
-                if not group_name:
+                if group_name is None:
                     return
                 group = rbd.Group(ioctx, group_name)
                 mirror_info = group.mirror_group_get_info()
@@ -117,7 +117,7 @@ class MirrorGroupSnapshotScheduleHandler:
 
     def load_schedules(self) -> None:
         self.log.info("MirrorGroupSnapshotScheduleHandler: load_schedules")
-        self.schedules.load(namespace_validator, group_validator)
+        self.schedules.load(namespace_validator, group_validator=group_validator)
 
     def refresh_groups(self) -> float:
         elapsed = (datetime.now() - self.last_refresh_groups).total_seconds()
@@ -174,7 +174,6 @@ class MirrorGroupSnapshotScheduleHandler:
                     ioctx, rbd.RBD_MIRROR_IMAGE_MODE_SNAPSHOT))
                 if not mirror_groups:
                     continue
-                # group_list2 not implemented
                 group_names = dict(
                     [(x['id'], x['name']) for x in filter(
                         lambda x: x['id'] in mirror_groups,
@@ -260,7 +259,7 @@ class MirrorGroupSnapshotScheduleHandler:
         if group_spec not in self.queue[schedule_time]:
             self.queue[schedule_time].append(group_spec)
 
-    def dequeue(self) -> Tuple[Optional[ImageSpec], float]:
+    def dequeue(self) -> Tuple[Optional[GroupSpec], float]:
         if not self.queue:
             return None, 1000.0
 
@@ -323,7 +322,7 @@ class MirrorGroupSnapshotScheduleHandler:
 
     def list(self, level_spec: LevelSpec) -> Tuple[int, str, str]:
         self.log.debug(
-            "MirrorSnapshotScheduleHandler: list: level_spec={}".format(
+            "MirrorGroupSnapshotScheduleHandler: list: level_spec={}".format(
                 level_spec.name))
 
         with self.lock:
@@ -333,7 +332,7 @@ class MirrorGroupSnapshotScheduleHandler:
 
     def status(self, level_spec: LevelSpec) -> Tuple[int, str, str]:
         self.log.debug(
-            "MirrorSnapshotScheduleHandler: status: level_spec={}".format(
+            "MirrorGroupSnapshotScheduleHandler: status: level_spec={}".format(
                 level_spec.name))
 
         scheduled_groups = []

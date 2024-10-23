@@ -134,7 +134,9 @@ class LevelSpec:
         pool_id = None
         namespace = None
         image_name = None
+        group_name = None
         image_id = None
+        group_id = None
         if match.group(1):
             pool_name = match.group(1)
             try:
@@ -160,31 +162,49 @@ class LevelSpec:
                             if namespace_validator:
                                 namespace_validator(ioctx)
                         if match.group(3):
-                            # TODO if it's a RBD group name, convert group name to group ID
-                            image_name = match.group(3)
-                            try:
-                                with rbd.Image(ioctx, image_name,
-                                               read_only=True) as image:
-                                    image_id = image.id()
-                                    id += "/" + image_id
-                                    if image_validator:
-                                        image_validator(image)
-                            except rbd.ImageNotFound:
-                                raise ValueError("image {} does not exist".format(
-                                    image_name))
-                            except rbd.InvalidArgument:
-                                raise ValueError(
-                                    "image {} is not in snapshot mirror mode".format(
+                            if group_validator:
+                                group_name = match.group(3)
+                                group = rbd.Group(ioctx, group_name)
+                                try:
+                                    group_id = group.id()
+                                except rbd.ObjectNotFound:
+                                    raise ValueError("group {} does not exist".format(
+                                        group_name))
+                                id += "/" + group_id
+                                try:
+                                    group_validator(group)
+                                except rbd.InvalidArgument:
+                                    raise ValueError(
+                                        "group {} is not in snapshot mirror mode".format(
+                                        group_id))
+                            else:
+                                image_name = match.group(3)
+                                try:
+                                    with rbd.Image(ioctx, image_name,
+                                                read_only=True) as image:
+                                        image_id = image.id()
+                                        id += "/" + image_id
+                                        if image_validator:
+                                            image_validator(image)
+                                except rbd.ImageNotFound:
+                                    raise ValueError("image {} does not exist".format(
                                         image_name))
+                                except rbd.InvalidArgument:
+                                    raise ValueError(
+                                        "image {} is not in snapshot mirror mode".format(
+                                            image_name))
 
             except rados.ObjectNotFound:
                 raise ValueError("pool {} does not exist".format(pool_name))
 
-        # normalize possible input name like 'rbd//image'
-        if not namespace and image_name:
-            name = "{}/{}".format(pool_name, image_name)
+        # normalize possible input name like 'rbd//image' or 'rbd//group'
+        if not namespace:
+            if image_name:
+                name = "{}/{}".format(pool_name, image_name)
+            elif group_name:
+                name = "{}/{}".format(pool_name, group_name)
 
-        return LevelSpec(name, id, pool_id, namespace, image_id)
+        return LevelSpec(name, id, pool_id, namespace, image_id, group_id)
 
     @classmethod
     def from_id(cls,
@@ -203,6 +223,7 @@ class LevelSpec:
         pool_id = None
         namespace = None
         image_id = None
+        group_id = None
         if match.group(1):
             pool_id = match.group(1)
             try:
@@ -226,28 +247,42 @@ class LevelSpec:
                         elif not match.group(3):
                             name += "/"
                         if match.group(3):
-                            # TODO if it's a rbd group then convert group_id to group_name
-                            image_id = match.group(3)
-                            try:
-                                with rbd.Image(ioctx, image_id=image_id,
+                            if group_validator:
+                                group_id = match.group(3)
+                                group_name = get_group_name_from_id(ioctx, group_id)
+                                if group_name is None:
+                                    raise ValueError(
+                                        "group {} does not exist".format(
+                                            group_id))
+                                name += group_name
+                                group = rbd.Group(ioctx, group_name)
+                                try:
+                                    group_validator(group)
+                                except rbd.InvalidArgument:
+                                    raise ValueError(
+                                        "group {} is not in snapshot mirror mode".format(
+                                            group_id))
+                            else:
+                                image_id = match.group(3)
+                                try:
+                                    with rbd.Image(ioctx, image_id=image_id,
                                                read_only=True) as image:
-                                    image_name = image.get_name()
-                                    name += image_name
-                                    if image_validator:
-                                        image_validator(image)
-                            except rbd.ImageNotFound:
-                                raise ValueError("image {} does not exist".format(
-                                    image_id))
-                            except rbd.InvalidArgument:
-                                raise ValueError(
-                                    "image {} is not in snapshot mirror mode".format(
-                                        image_id))
-                                    
-
+                                        image_name = image.get_name()
+                                        name += image_name
+                                        if image_validator:
+                                            image_validator(image)
+                                except rbd.ImageNotFound:
+                                    raise ValueError(
+                                        "image {} does not exist".format(
+                                         image_id))
+                                except rbd.InvalidArgument:
+                                    raise ValueError(
+                                        "image {} is not in snapshot mirror mode".format(
+                                            image_id))
             except rados.ObjectNotFound:
                 raise ValueError("pool {} does not exist".format(pool_id))
 
-        return LevelSpec(name, id, pool_id, namespace, image_id)
+        return LevelSpec(name, id, pool_id, namespace, image_id, group_id)
 
 
 class Interval:

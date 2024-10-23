@@ -58,26 +58,40 @@ int parse_schedule_name(const std::string &name, bool allow_images,
 } // anonymous namespace
 
 void add_level_spec_options(po::options_description *options,
-                            bool allow_image) {
+                            bool allow_image, bool allow_group) {
   at::add_pool_option(options, at::ARGUMENT_MODIFIER_NONE);
   at::add_namespace_option(options, at::ARGUMENT_MODIFIER_NONE);
   if (allow_image) {
     at::add_image_option(options, at::ARGUMENT_MODIFIER_NONE);
   }
+  if (allow_group) {
+    at::add_group_option(options, at::ARGUMENT_MODIFIER_NONE);
+  }
 }
 
 int get_level_spec_args(const po::variables_map &vm,
                         std::map<std::string, std::string> *args) {
-  if (vm.count(at::IMAGE_NAME)) {
+  if (vm.count(at::IMAGE_NAME) or vm.count(at::GROUP_NAME)) {
     std::string pool_name;
     std::string namespace_name;
-    std::string image_name;
+    std::string image_or_group_name;
 
-    int r = utils::extract_spec(vm[at::IMAGE_NAME].as<std::string>(),
-                                &pool_name, &namespace_name, &image_name,
-                                nullptr, utils::SPEC_VALIDATION_FULL);
-    if (r < 0) {
-      return r;
+    if (vm.count(at::IMAGE_NAME)) {
+      int r = utils::extract_spec(vm[at::IMAGE_NAME].as<std::string>(),
+                                  &pool_name, &namespace_name, &image_or_group_name,
+                                  nullptr, utils::SPEC_VALIDATION_FULL);
+      if (r < 0) {
+	return r;
+      }
+    }
+    
+    if (vm.count(at::GROUP_NAME)) {
+      int r = utils::extract_spec(vm[at::GROUP_NAME].as<std::string>(),
+                                  &pool_name, &namespace_name, &image_or_group_name,
+                                  nullptr, utils::SPEC_VALIDATION_FULL);
+      if (r < 0) {
+	return r;
+      }
     }
 
     if (!pool_name.empty()) {
@@ -102,10 +116,10 @@ int get_level_spec_args(const po::variables_map &vm,
     }
 
     if (namespace_name.empty()) {
-      (*args)["level_spec"] = pool_name + "/" + image_name;
+      (*args)["level_spec"] = pool_name + "/" + image_or_group_name;
     } else {
       (*args)["level_spec"] = pool_name + "/" + namespace_name + "/" +
-        image_name;
+        image_or_group_name;
     }
     return 0;
   }

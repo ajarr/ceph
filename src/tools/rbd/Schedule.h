@@ -17,7 +17,8 @@ namespace ceph { class Formatter; }
 namespace rbd {
 
 void add_level_spec_options(
-  boost::program_options::options_description *options, bool allow_image=true);
+  boost::program_options::options_description *options, bool allow_image=true,
+  bool allow_group=false);
 int get_level_spec_args(const boost::program_options::variables_map &vm,
                         std::map<std::string, std::string> *args);
 void normalize_level_spec_args(std::map<std::string, std::string> *args);

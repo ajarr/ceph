@@ -9,6 +9,7 @@
 #include "include/rados/librados.hpp"
 #include "include/rbd/librbd.hpp"
 #include "librbd/ImageCtx.h"
+#include "cls/rbd/cls_rbd_types.h"
 
 struct Context;
 
@@ -62,6 +63,7 @@ private:
   const std::string m_group_name;
   std::string m_group_id;
   mirror_group_info_t *m_mirror_group_info;
+  std::vector<cls::rbd::GroupSnapshot> m_group_snaps;
   Context *m_on_finish;
 
   bufferlist m_outbl;
@@ -71,6 +73,9 @@ private:
 
   void get_info();
   void handle_get_info(int r);
+
+  void get_last_mirror_snapshot_state();
+  void handle_get_last_mirror_snapshot_state(int r);
 
   void finish(int r);
 };

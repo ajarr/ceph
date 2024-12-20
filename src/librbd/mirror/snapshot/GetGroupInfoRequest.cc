@@ -9,6 +9,7 @@
 #include "cls/rbd/cls_rbd_client.h"
 #include "librbd/ImageCtx.h"
 #include "librbd/Utils.h"
+#include "librbd/group/ListSnapshotsRequest.h"
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
@@ -109,6 +110,48 @@ void GetGroupInfoRequest<I>::handle_get_info(int r) {
       static_cast<rbd_mirror_image_mode_t>(mirror_group.mirror_image_mode);
   m_mirror_group_info->state =
       static_cast<rbd_mirror_group_state_t>(mirror_group.state);
+  m_mirror_group_info->primary = false;
+
+  get_last_mirror_snapshot_state();
+}
+
+template <typename I>
+void GetGroupInfoRequest<I>::get_last_mirror_snapshot_state() {
+  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
+  ldout(cct, 10) << dendl;
+
+  auto ctx = util::create_context_callback<
+    GetGroupInfoRequest<I>,
+    &GetGroupInfoRequest<I>::handle_get_last_mirror_snapshot_state>(this);
+
+  auto req = group::ListSnapshotsRequest<I>::create(
+    m_group_ioctx, m_group_id, true, true, &m_group_snaps, ctx);
+
+  req->send();
+}
+
+template <typename I>
+void GetGroupInfoRequest<I>::handle_get_last_mirror_snapshot_state(int r) {
+  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
+  ldout(cct, 10) << dendl;
+
+  if (r < 0) {
+    lderr(cct) << "failed to get group snapshots of group " << m_group_name
+               << "': " << cpp_strerror(r) << dendl;
+    finish(r);
+    return;
+  }
+
+  for (auto it = m_group_snaps.rbegin(); it != m_group_snaps.rend(); it++) {
+    auto ns = std::get_if<cls::rbd::MirrorGroupSnapshotNamespace>(
+        &it->snapshot_namespace);
+    if (ns != nullptr) {
+      // XXXMG: check primary_mirror_uuid matches?
+      m_mirror_group_info->primary =
+	(ns->state == cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY);
+      break;
+    }
+  }
 
   finish(0);
 }

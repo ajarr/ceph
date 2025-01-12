@@ -1725,8 +1725,8 @@ namespace librbd {
   int RBD::mirror_group_create_snapshot(IoCtx& group_ioctx,
                                         const char *group_name,
                                         uint32_t flags, std::string *snap_id) {
-    return librbd::api::Mirror<>::group_snapshot_create(group_ioctx, group_name,
-                                                        flags, snap_id);
+    return librbd::api::Mirror<>::group_snapshot_create2(group_ioctx, group_name,
+                                                         flags, snap_id);
   }
 
   int RBD::mirror_group_get_info(IoCtx& group_ioctx, const char *group_name,
@@ -8143,8 +8143,8 @@ extern "C" int rbd_mirror_group_create_snapshot(rados_ioctx_t group_p,
   librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
 
   std::string cpp_snap_id;
-  int r = librbd::api::Mirror<>::group_snapshot_create(group_ioctx, group_name,
-                                                       flags, &cpp_snap_id);
+  int r = librbd::api::Mirror<>::group_snapshot_create2(group_ioctx, group_name,
+                                                        flags, &cpp_snap_id);
   if (r < 0) {
     return r;
   }

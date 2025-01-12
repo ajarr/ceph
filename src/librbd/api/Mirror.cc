@@ -33,6 +33,7 @@
 #include "librbd/mirror/Types.h"
 #include "librbd/MirroringWatcher.h"
 #include "librbd/mirror/snapshot/CreatePrimaryRequest.h"
+#include "librbd/mirror/snapshot/CreateGroupRequest.h"
 #include "librbd/mirror/snapshot/GetGroupInfoRequest.h"
 #include "librbd/mirror/snapshot/ImageMeta.h"
 #include "librbd/mirror/snapshot/UnlinkPeerRequest.h"
@@ -3527,6 +3528,39 @@ int Mirror<I>::group_snapshot_create(IoCtx& group_ioctx, const char *group_name,
   close_images(&image_ctxs);
 
   return ret_code;
+}
+
+template <typename I>
+void Mirror<I>::group_snapshot_create2(IoCtx& group_ioctx,
+                                       const std::string& group_name,
+			               uint32_t flags, std::string *snap_id,
+                                       Context *on_finish) {
+  CephContext *cct = (CephContext *)group_ioctx.cct();
+  ldout(cct, 20) << "group io_ctx=" << &group_ioctx
+		 << ", group_name=" << group_name
+		 << ", flags=" << flags << dendl;
+
+  auto req = mirror::snapshot::CreateGroupRequest<I>::create(
+    group_ioctx, group_name, flags, snap_id, on_finish);
+  req->send();
+}
+
+template <typename I>
+int Mirror<I>::group_snapshot_create2(IoCtx& group_ioctx,
+                                      const std::string& group_name,
+                                      uint32_t flags, std::string *snap_id) {
+  CephContext *cct = (CephContext *)group_ioctx.cct();
+
+  C_SaferCond ctx;
+  group_snapshot_create2(group_ioctx, group_name, flags, snap_id, &ctx);
+
+  int r = ctx.wait();
+  if (r < 0) {
+    lderr(cct) << "failed to create mirror snapshot for group '" << group_name
+               << "': " << cpp_strerror(r) << dendl;
+  }
+
+  return r;
 }
 
 template <typename I>

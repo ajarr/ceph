@@ -33,7 +33,7 @@
 #include "librbd/mirror/Types.h"
 #include "librbd/MirroringWatcher.h"
 #include "librbd/mirror/snapshot/CreatePrimaryRequest.h"
-#include "librbd/mirror/snapshot/CreateGroupRequest.h"
+#include "librbd/mirror/snapshot/CreatePrimaryGroupRequest.h"
 #include "librbd/mirror/snapshot/GetGroupInfoRequest.h"
 #include "librbd/mirror/snapshot/ImageMeta.h"
 #include "librbd/mirror/snapshot/UnlinkPeerRequest.h"
@@ -3540,7 +3540,7 @@ void Mirror<I>::group_snapshot_create2(IoCtx& group_ioctx,
 		 << ", group_name=" << group_name
 		 << ", flags=" << flags << dendl;
 
-  auto req = mirror::snapshot::CreateGroupRequest<I>::create(
+  auto req = mirror::snapshot::CreatePrimaryGroupRequest<I>::create(
     group_ioctx, group_name, flags, snap_id, on_finish);
   req->send();
 }

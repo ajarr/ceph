@@ -1,7 +1,7 @@
 // -*- mode:c++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 
-#include "librbd/mirror/snapshot/CreateGroupRequest.h"
+#include "librbd/mirror/snapshot/CreatePrimaryGroupRequest.h"
 #include "include/ceph_assert.h"
 #include "common/dout.h"
 #include "include/Context.h"
@@ -24,7 +24,7 @@
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
-#define dout_prefix *_dout << "librbd::mirror::snapshot::CreateGroupRequest: " \
+#define dout_prefix *_dout << "librbd::mirror::snapshot::CreatePrimaryGroupRequest: " \
                            << " " << __func__ << ": "
 
 namespace librbd {
@@ -46,52 +46,6 @@ std::string prepare_primary_mirror_snap_name(CephContext *cct,
   return ind_snap_name_stream.str();
 }
 
-//TODO: need to make this function asynchronous
-template <typename I>
-void remove_interim_snapshots(IoCtx& group_ioctx,
-                              std::string group_header_oid,
-                              std::vector<I *> *image_ctxs,
-                              cls::rbd::GroupSnapshot *group_snap) {
-  auto cct = (CephContext *)group_ioctx.cct();
-  ldout(cct, 10) << dendl;
-
-  int r = cls_client::group_snap_remove(&group_ioctx, group_header_oid,
-      group_snap->id);
-  if (r < 0) {
-    lderr(cct) << "failed to remove group snapshot metadata: "
-               << cpp_strerror(r) << dendl;
-  }
-
-  std::vector<C_SaferCond*> on_finishes(image_ctxs->size(), nullptr);
-  for (size_t i = 0; i < image_ctxs->size(); ++i) {
-    if (group_snap->snaps[i].snap_id == CEPH_NOSNAP) {
-      continue;
-    }
-    ldout(cct, 10) << "removing individual snapshot: "
-                   << group_snap->snaps[i].snap_id << dendl;
-
-    librbd::ImageCtx *ictx = (*image_ctxs)[i];
-    C_SaferCond* on_finish = new C_SaferCond;
-    ictx->operations->snap_remove(ictx->snap_namespace,
-                                  ictx->snap_name.c_str(),
-                                  on_finish);
-    on_finishes[i] = on_finish;
-  }
-
-  for (int i = 0, n = image_ctxs->size(); i < n; ++i) {
-    if (!on_finishes[i]) {
-      continue;
-    }
-    r = on_finishes[i]->wait();
-    delete on_finishes[i];
-    // if previous attempts to remove this snapshot failed then the image's snapshot may not exist
-    if (r < 0 && r != -ENOENT) {
-      lderr(cct) << "failed cleaning up image snapshot: "
-                 << cpp_strerror(r) << dendl;
-      // just report error, but don't abort the process
-    }
-  }
-}
 
 template <typename I>
 struct C_ImageSnapshotCreate2 : public Context {
@@ -182,21 +136,22 @@ void image_snapshot_create2(I *ictx, uint32_t flags,
   }
 }
 
+
 template <typename I>
-void CreateGroupRequest<I>::send() {
+void CreatePrimaryGroupRequest<I>::send() {
  get_group_id();
 }
 
 template <typename I>
-void CreateGroupRequest<I>::get_group_id() {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::get_group_id() {
+  ldout(m_cct, 10) << dendl;
 
   librados::ObjectReadOperation op;
   cls_client::dir_get_id_start(&op, m_group_name);
 
   auto comp = create_rados_callback<
-      CreateGroupRequest<I>, &CreateGroupRequest<I>::handle_get_group_id>(this);
+      CreatePrimaryGroupRequest<I>,
+      &CreatePrimaryGroupRequest<I>::handle_get_group_id>(this);
 
   m_outbl.clear();
   int r = m_group_ioctx.aio_operate(RBD_GROUP_DIRECTORY, comp, &op, &m_outbl);
@@ -205,12 +160,12 @@ void CreateGroupRequest<I>::get_group_id() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_get_group_id(int r) {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << "r=" << r << dendl;
+void CreatePrimaryGroupRequest<I>::handle_get_group_id(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
+
   if (r < 0) {
-    lderr(cct) << "failed to get ID of group '" << m_group_name
-               << "': " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to get ID of group '" << m_group_name
+                 << "': " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
@@ -218,8 +173,8 @@ void CreateGroupRequest<I>::handle_get_group_id(int r) {
   auto it = m_outbl.cbegin();
   r = cls_client::dir_get_id_finish(&it, &m_group_id);
   if (r < 0) {
-    lderr(cct) << "failed to get ID of group '" << m_group_name
-               << "': " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to get ID of group '" << m_group_name
+                 << "': " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
@@ -228,16 +183,15 @@ void CreateGroupRequest<I>::handle_get_group_id(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::get_mirror_group() {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::get_mirror_group() {
+  ldout(m_cct, 10) << dendl;
 
   librados::ObjectReadOperation op;
   cls_client::mirror_group_get_start(&op, m_group_id);
 
   auto comp = create_rados_callback<
-      CreateGroupRequest<I>,
-      &CreateGroupRequest<I>::handle_get_mirror_group>(this);
+      CreatePrimaryGroupRequest<I>,
+      &CreatePrimaryGroupRequest<I>::handle_get_mirror_group>(this);
 
   m_outbl.clear();
   int r = m_group_ioctx.aio_operate(RBD_MIRRORING, comp, &op, &m_outbl);
@@ -246,16 +200,17 @@ void CreateGroupRequest<I>::get_mirror_group() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_get_mirror_group(int r) {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
+void CreatePrimaryGroupRequest<I>::handle_get_mirror_group(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
+
   if (r == -ENOENT) {
-    ldout(cct, 10) << "mirroring for group '" << m_group_name
-                   << "' disabled" << dendl;
+    ldout(m_cct, 10) << "mirroring for group '" << m_group_name
+                     << "' disabled" << dendl;
     finish(-EINVAL);
     return;
   } else if (r < 0) {
-    lderr(cct) << "failed to retrieve mirror group metadata for group '"
-               << m_group_name << "': " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to retrieve mirror group metadata for group '"
+                 << m_group_name << "': " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
@@ -263,8 +218,8 @@ void CreateGroupRequest<I>::handle_get_mirror_group(int r) {
   auto it = m_outbl.cbegin();
   r = cls_client::mirror_group_get_finish(&it, &m_mirror_group);
   if (r < 0) {
-    lderr(cct) << "failed to retrieve mirror group metadata for group '"
-               << m_group_name << "': " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to retrieve mirror group metadata for group '"
+                 << m_group_name << "': " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
@@ -273,8 +228,8 @@ void CreateGroupRequest<I>::handle_get_mirror_group(int r) {
       cls::rbd::MIRROR_IMAGE_MODE_SNAPSHOT) {
     auto mode = static_cast<rbd_mirror_image_mode_t>(
         m_mirror_group.mirror_image_mode);
-    lderr(cct) << "cannot create snapshot, mirror mode is set to: "
-               << mode << dendl;
+    lderr(m_cct) << "cannot create snapshot, mirror mode is set to: "
+                 << mode << dendl;
     finish(-EOPNOTSUPP);
     return;
   }
@@ -283,13 +238,13 @@ void CreateGroupRequest<I>::handle_get_mirror_group(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::get_last_mirror_snapshot_state() {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::get_last_mirror_snapshot_state() {
+  ldout(m_cct, 10) << dendl;
 
   auto ctx = util::create_context_callback<
-    CreateGroupRequest<I>,
-    &CreateGroupRequest<I>::handle_get_last_mirror_snapshot_state>(this);
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_get_last_mirror_snapshot_state>(
+      this);
 
   auto req = group::ListSnapshotsRequest<I>::create(
     m_group_ioctx, m_group_id, true, true, &m_existing_group_snaps, ctx);
@@ -298,31 +253,34 @@ void CreateGroupRequest<I>::get_last_mirror_snapshot_state() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_get_last_mirror_snapshot_state(int r) {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::handle_get_last_mirror_snapshot_state(
+    int r) {
+  ldout(m_cct, 10) << dendl;
 
   if (r < 0) {
-    lderr(cct) << "failed to list group snapshots of group '" << m_group_name
+    lderr(m_cct) << "failed to list group snapshots of group '" << m_group_name
                << "': " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
 
-  cls::rbd::MirrorSnapshotState state = cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY;
-  for (auto it = m_existing_group_snaps.rbegin(); it != m_existing_group_snaps.rend(); it++) {
+  cls::rbd::MirrorSnapshotState state =
+    cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY;
+  for (auto it = m_existing_group_snaps.rbegin();
+       it != m_existing_group_snaps.rend(); it++) {
     auto ns = std::get_if<cls::rbd::MirrorGroupSnapshotNamespace>(
         &it->snapshot_namespace);
     if (ns != nullptr) {
       // XXXMG: check primary_mirror_uuid matches?
-      ldout(cct, 10) <<  "the state of existing group snap is: " << ns->state << dendl;
+      ldout(m_cct, 10) <<  "the state of existing group snap is: " << ns->state
+                     << dendl;
       state = ns->state;
       break;
     }
   }
 
   if (state != cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY) {
-    lderr(cct) << "group " << m_group_name << " is not primary" << dendl;
+    lderr(m_cct) << "group " << m_group_name << " is not primary" << dendl;
     finish(-EINVAL);
     return;
   }
@@ -331,42 +289,39 @@ void CreateGroupRequest<I>::handle_get_last_mirror_snapshot_state(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::generate_group_snap() {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::generate_group_snap() {
+  ldout(m_cct, 10) << dendl;
 
   m_group_snap.id = librbd::util::generate_image_id(m_group_ioctx);
   m_group_snap.snapshot_namespace = cls::rbd::MirrorGroupSnapshotNamespace{};
   m_group_snap.name = prepare_primary_mirror_snap_name(
-    cct, m_mirror_group.global_group_id, m_group_snap.id);
+    m_cct, m_mirror_group.global_group_id, m_group_snap.id);
 
   prepare_group_images();
 }
 
 template <typename I>
-void CreateGroupRequest<I>::prepare_group_images() {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::prepare_group_images() {
+  ldout(m_cct, 10) << dendl;
 
   auto ctx = util::create_context_callback<
-    CreateGroupRequest<I>,
-    &CreateGroupRequest<I>::handle_prepare_group_images>(this);
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_prepare_group_images>(this);
 
   auto req = mirror::snapshot::PrepareGroupImagesRequest<I>::create(
-    m_group_ioctx, m_group_id, cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY, m_flags,
-    &m_group_snap, &m_image_ctxs, &m_quiesce_requests, ctx);
+    m_group_ioctx, m_group_id, cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY,
+    m_flags, &m_group_snap, &m_image_ctxs, &m_quiesce_requests, ctx);
 
   req->send();
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_prepare_group_images(int r) {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::handle_prepare_group_images(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
 
   if (r < 0) {
-    lderr(cct) << "failed to prepare group images '" << m_group_name
-               << "': " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to prepare group images '" << m_group_name
+                 << "': " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
@@ -375,15 +330,15 @@ void CreateGroupRequest<I>::handle_prepare_group_images(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::create_image_snaps() {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << "group name '" << m_group_name << "' group ID '"
-                 << m_group_id << "'" << dendl;
+void CreatePrimaryGroupRequest<I>::create_image_snaps() {
+  ldout(m_cct, 10) << "group name '" << m_group_name << "' group ID '"
+                   << m_group_id
+                   << "' group snap ID '" << m_group_snap.id << dendl;
 
   auto ctx = librbd::util::create_context_callback<
-    CreateGroupRequest<I>,
-    &CreateGroupRequest<I>::handle_create_image_snaps>(this);
-  auto gather_ctx = new C_Gather(cct, ctx);
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_create_image_snaps>(this);
+  auto gather_ctx = new C_Gather(m_cct, ctx);
 
   m_image_snap_ids.resize(m_image_ctxs.size(), CEPH_NOSNAP);
 
@@ -397,37 +352,36 @@ void CreateGroupRequest<I>::create_image_snaps() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_create_image_snaps(int r) {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << "r=" << r << dendl;
+void CreatePrimaryGroupRequest<I>::handle_create_image_snaps(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
 
   std::string group_header_oid = librbd::util::group_header_name(m_group_id);
 
   if (r < 0) {
-    lderr(cct) << "failed to create image snaps: "
+    lderr(m_cct) << "failed to create image snaps: "
                << cpp_strerror(r) << dendl;
 
     if (m_ret_code == 0) {
       m_ret_code = r;
     }
 
-    ldout(cct, 10) << "undoing group create snapshot: " << r << dendl;
-    // TODO: need to make this asynchronous
-    remove_interim_snapshots(m_group_ioctx, group_header_oid, &m_image_ctxs,
-                             &m_group_snap);
+    ldout(m_cct, 10) << "undoing group create snapshot: " << r << dendl;
+    remove_interim_snapshots();
   } else {
     for (size_t i = 0; i < m_image_ctxs.size(); i++) {
       m_group_snap.snaps[i].snap_id = m_image_snap_ids[i];
     }
 
-    ldout(cct, 10) << "FINISHED creating group image snaps" << dendl;
-    
     m_group_snap.state = cls::rbd::GROUP_SNAPSHOT_STATE_COMPLETE;
     r = cls_client::group_snap_set(&m_group_ioctx, group_header_oid,
                                    m_group_snap);
     if (r < 0) {
-      lderr(cct) << "failed to update group snapshot metadata: "
+      lderr(m_cct) << "failed to update group snapshot metadata: "
                  << cpp_strerror(r) << dendl;
+      if (m_ret_code == 0) {
+        m_ret_code = r;
+      }
+      // TODO: should remove_interim_snapshots() be called here for cleanup?
     }
 
     *m_snap_id = m_group_snap.id;
@@ -438,7 +392,8 @@ void CreateGroupRequest<I>::handle_create_image_snaps(int r) {
     return;
   }
 
-  if(!m_ret_code) {
+  // TODO: figure out why unlink only during success?
+  if (m_ret_code == 0) {
     unlink_peer_group();
     return;
   }
@@ -447,16 +402,89 @@ void CreateGroupRequest<I>::handle_create_image_snaps(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::notify_unquiesce() {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::remove_interim_snapshots() {
+  ldout(m_cct, 10) << dendl;
+
+  int r = cls_client::group_snap_remove(
+    &m_group_ioctx,
+    librbd::util::group_header_name(m_group_id),
+    m_group_snap.id);
+
+  if (r < 0) {
+    lderr(m_cct) << "failed to remove group snapshot metadata: "
+                 << cpp_strerror(r) << dendl;
+
+    if (!m_quiesce_requests.empty()) {
+      notify_unquiesce();
+      return;
+    }
+  
+    if (m_ret_code == 0) {
+      unlink_peer_group();
+      return;
+    }
+  
+    close_images();
+  }
+  
+  auto ctx = librbd::util::create_context_callback<
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_remove_interim_snapshots>(this);
+  auto gather_ctx = new C_Gather(m_cct, ctx);
+
+
+  for (size_t i = 0; i < m_image_ctxs.size(); ++i) {
+    if (m_group_snap.snaps[i].snap_id == CEPH_NOSNAP) {
+      continue;
+    }
+    ldout(m_cct, 10) << "removing individual snapshot: "
+                     << m_group_snap.snaps[i].snap_id << dendl;
+
+    librbd::ImageCtx *ictx = m_image_ctxs[i];
+    ldout(m_cct, 10) << "removing individual snapshot NAME: "
+                     << ictx->snap_name.c_str() << dendl;
+    ictx->operations->snap_remove(ictx->snap_namespace,
+                                  ictx->snap_name.c_str(),
+                                  gather_ctx->new_sub());
+  }
+
+  gather_ctx->activate();
+}
+
+template <typename I>
+void CreatePrimaryGroupRequest<I>::handle_remove_interim_snapshots(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
+
+  // if previous attempts to remove this snapshot failed then the
+  // image's snapshot may not exist
+  if (r < 0 && r != -ENOENT) {
+    lderr(m_cct) << "failed cleaning up image snapshot: "
+                 << cpp_strerror(r) << dendl;
+  }
+
+  if (!m_quiesce_requests.empty()) {
+    notify_unquiesce();
+    return;
+  }
+
+  if (m_ret_code == 0) {
+    unlink_peer_group();
+    return;
+  }
+
+  close_images();
+}
+
+template <typename I>
+void CreatePrimaryGroupRequest<I>::notify_unquiesce() {
+  ldout(m_cct, 10) << dendl;
 
   ceph_assert(m_quiesce_requests.size() == m_image_ctxs.size());
 
   auto ctx = librbd::util::create_context_callback<
-    CreateGroupRequest<I>,
-    &CreateGroupRequest<I>::handle_notify_unquiesce>(this);
-  auto gather_ctx = new C_Gather(cct, ctx);
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_notify_unquiesce>(this);
+  auto gather_ctx = new C_Gather(m_cct, ctx);
 
   int image_count = m_image_ctxs.size();
   for (int i = 0; i < image_count; ++i) {
@@ -469,16 +497,15 @@ void CreateGroupRequest<I>::notify_unquiesce() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_notify_unquiesce(int r) {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << "r=" << r << dendl;
+void CreatePrimaryGroupRequest<I>::handle_notify_unquiesce(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
 
   if (r < 0) {
-    lderr(cct) << "failed to notify the unquiesce requests: "
-               << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to notify the unquiesce requests: "
+                 << cpp_strerror(r) << dendl;
   }
 
-  if (!m_ret_code) {
+  if (m_ret_code == 0) {
     unlink_peer_group();
     return;
   }
@@ -487,13 +514,12 @@ void CreateGroupRequest<I>::handle_notify_unquiesce(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::unlink_peer_group() {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::unlink_peer_group() {
+  ldout(m_cct, 10) << dendl;
 
   auto ctx = librbd::util::create_context_callback<
-    CreateGroupRequest<I>,
-    &CreateGroupRequest<I>::handle_unlink_peer_group>(this);
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_unlink_peer_group>(this);
 
   auto req = group::UnlinkPeerGroupRequest<I>::create(
     m_group_ioctx, m_group_id, &m_image_ctxs, ctx);
@@ -502,26 +528,25 @@ void CreateGroupRequest<I>::unlink_peer_group() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_unlink_peer_group(int r) {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << "r=" << r << dendl;
+void CreatePrimaryGroupRequest<I>::handle_unlink_peer_group(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
 
   if (r < 0) {
-    lderr(cct) << "failed to unlink peer group: " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to unlink peer group: " << cpp_strerror(r)
+                 << dendl;
   }
 
   close_images();
 }
 
 template <typename I>
-void CreateGroupRequest<I>::close_images() {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << dendl;
+void CreatePrimaryGroupRequest<I>::close_images() {
+  ldout(m_cct, 10) << dendl;
 
   auto ctx = librbd::util::create_context_callback<
-    CreateGroupRequest<I>,
-    &CreateGroupRequest<I>::handle_close_images>(this);
-  auto gather_ctx = new C_Gather(cct, ctx);
+    CreatePrimaryGroupRequest<I>,
+    &CreatePrimaryGroupRequest<I>::handle_close_images>(this);
+  auto gather_ctx = new C_Gather(m_cct, ctx);
 
   for (auto ictx: m_image_ctxs) {
     ictx->state->close(gather_ctx->new_sub());
@@ -531,12 +556,11 @@ void CreateGroupRequest<I>::close_images() {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::handle_close_images(int r) {
-  auto cct = (CephContext *)m_group_ioctx.cct();
-  ldout(cct, 10) << "r=" << r << dendl;
+void CreatePrimaryGroupRequest<I>::handle_close_images(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
 
   if (r < 0) {
-    lderr(cct) << "failed to close images: " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to close images: " << cpp_strerror(r) << dendl;
   }
 
   m_image_ctxs.clear();
@@ -544,9 +568,8 @@ void CreateGroupRequest<I>::handle_close_images(int r) {
 }
 
 template <typename I>
-void CreateGroupRequest<I>::finish(int r) {
-  auto cct = reinterpret_cast<CephContext *>(m_group_ioctx.cct());
-  ldout(cct, 10) << "r=" << r << dendl;
+void CreatePrimaryGroupRequest<I>::finish(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
 
   m_on_finish->complete(r);
   delete this;
@@ -556,4 +579,4 @@ void CreateGroupRequest<I>::finish(int r) {
 } // namespace mirror
 } // namespace librbd
 
-template class librbd::mirror::snapshot::CreateGroupRequest<librbd::ImageCtx>;
+template class librbd::mirror::snapshot::CreatePrimaryGroupRequest<librbd::ImageCtx>;

@@ -359,7 +359,7 @@ void CreatePrimaryGroupRequest<I>::handle_create_image_snaps(int r) {
 
   if (r < 0) {
     lderr(m_cct) << "failed to create image snaps: "
-               << cpp_strerror(r) << dendl;
+                 << cpp_strerror(r) << dendl;
 
     if (m_ret_code == 0) {
       m_ret_code = r;
@@ -367,6 +367,7 @@ void CreatePrimaryGroupRequest<I>::handle_create_image_snaps(int r) {
 
     ldout(m_cct, 10) << "undoing group create snapshot: " << r << dendl;
     remove_interim_snapshots();
+    return;
   } else {
     for (size_t i = 0; i < m_image_ctxs.size(); i++) {
       m_group_snap.snaps[i].snap_id = m_image_snap_ids[i];
@@ -425,6 +426,7 @@ void CreatePrimaryGroupRequest<I>::remove_interim_snapshots() {
     }
   
     close_images();
+    return;
   }
   
   auto ctx = librbd::util::create_context_callback<
@@ -437,14 +439,20 @@ void CreatePrimaryGroupRequest<I>::remove_interim_snapshots() {
     if (m_group_snap.snaps[i].snap_id == CEPH_NOSNAP) {
       continue;
     }
-    ldout(m_cct, 10) << "removing individual snapshot: "
-                     << m_group_snap.snaps[i].snap_id << dendl;
 
     librbd::ImageCtx *ictx = m_image_ctxs[i];
-    ldout(m_cct, 10) << "removing individual snapshot NAME: "
-                     << ictx->snap_name.c_str() << dendl;
-    ictx->operations->snap_remove(ictx->snap_namespace,
-                                  ictx->snap_name.c_str(),
+
+    std::shared_lock image_locker{ictx->image_lock};
+    auto info = ictx->get_snap_info(
+      m_group_snap.snaps[i].snap_id);
+    ceph_assert(info != nullptr);
+    image_locker.unlock();
+
+    ldout(m_cct, 10) << "removing individual snapshot: "
+                     << info->name << dendl;
+
+    ictx->operations->snap_remove(info->snap_namespace,
+                                  info->name,
                                   gather_ctx->new_sub());
   }
 

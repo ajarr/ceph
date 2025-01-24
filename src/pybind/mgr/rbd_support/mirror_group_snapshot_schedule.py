@@ -32,8 +32,163 @@ class GroupSpec(NamedTuple):
     group_id: str
 
 
+class CreateGroupSnapshotRequests:
+
+    def __init__(self, handler: Any) -> None:
+        self.lock = Lock()
+        self.condition = Condition(self.lock)
+        self.handler = handler
+        self.rados = handler.module.rados
+        self.log = handler.log
+        self.pending: Set[GroupSpec] = set()
+        self.queue: List[GroupSpec] = []
+        self.ioctxs: Dict[Tuple[str, str], Tuple[rados.Ioctx, Set[GroupSpec]]] = {}
+
+    def wait_for_pending(self) -> None:
+        with self.lock:
+            while self.pending:
+                self.log.debug(
+                    "CreateGroupSnapshotRequests.wait_for_pending: "
+                    "{} groups".format(len(self.pending)))
+                self.condition.wait()
+        self.log.debug("CreateGroupSnapshotRequests.wait_for_pending: done")
+
+    def add(self, pool_id: str, namespace: str, group_id: str) -> None:
+        group_spec = GroupSpec(pool_id, namespace, group_id)
+
+        self.log.debug("CreateGroupSnapshotRequests.add: {}/{}/{}".format(
+            pool_id, namespace, group_id))
+
+        max_concurrent = self.handler.module.get_localized_module_option(
+            self.handler.MODULE_OPTION_NAME_MAX_CONCURRENT_GROUP_SNAP_CREATE)
+        
+        self.log.debug("CreateGroupSnapshotRequests.add: {}/{}/{} max concurrent snap create {}".format(
+            pool_id, namespace, group_id, max_concurrent))
+
+        with self.lock:
+            if group_spec in self.pending:
+                self.log.info(
+                    "CreateGroupSnapshotRequests.add: {}/{}/{}: {}".format(
+                        pool_id, namespace, group_id,
+                        "previous request is still in progress"))
+                return
+            self.pending.add(group_spec)
+
+            if len(self.pending) > max_concurrent:
+                self.queue.append(group_spec)
+                return
+
+        self.open_group(group_spec)
+
+    def open_group(self, group_spec: GroupSpec) -> None:
+        pool_id, namespace, group_id = group_spec
+
+        self.log.debug(
+            "CreateGroupSnapshotRequests.open_group for {}/{}/{}".format(
+                pool_id, namespace, group_id))
+
+        try:
+            ioctx = self.get_ioctx(group_spec)
+            group_name = rbd.RBD().group_get_name(ioctx, group_id)
+            group = rbd.Group(ioctx, group_name)
+        except Exception as e:
+            self.log.error(
+                "exception when creating snapshot for {}/{}/{}: {}".format(
+                    pool_id, namespace, group_id, e))
+            self.finish(group_spec)
+
+        self.create_snapshot(group_spec, group)
+
+    def create_snapshot(self, group_spec: GroupSpec, group: rbd.Group) -> None:
+        pool_id, namespace, group_id = group_spec
+
+        self.log.debug(
+            "CreateGroupSnapshotRequests.create_snapshot for {}/{}/{}".format(
+                pool_id, namespace, group_id))
+
+        def cb(comp: rados.Completion, snap_id: Optional[str]) -> None:
+            self.handle_create_snapshot(group_spec, comp, snap_id)
+
+        try:
+            group.aio_mirror_group_create_snapshot(0, cb)
+        except Exception as e:
+            self.log.error(
+                "exception when creating snapshot for {}/{}/{}: {}".format(
+                    pool_id, namespace, group_id, e))
+            self.finish(group_spec)
+        self.log.debug(
+            "CreateGroupSnapshotRequests.create_snapshot EXITING for {}/{}/{}".format(
+                pool_id, namespace, group_id))
+
+    def handle_create_snapshot(self,
+                               group_spec: GroupSpec,
+                               comp: rados.Completion,
+                               snap_id: Optional[str]) -> None:
+        pool_id, namespace, group_id = group_spec
+
+        self.log.debug(
+            "CreateGroupSnapshotRequests.handle_create_snapshot for {}/{}/{}: r={}, snap_id={}".format(
+                pool_id, namespace, group_id, comp.get_return_value(), snap_id))
+
+        if snap_id is None and comp.get_return_value() != -errno.ENOENT:
+            self.log.error(
+                "error when creating snapshot for {}/{}/{}: {}".format(
+                    pool_id, namespace, group_id, comp.get_return_value()))
+
+        self.finish(group_spec)
+
+    def finish(self, group_spec: GroupSpec) -> None:
+        pool_id, namespace, group_id = group_spec
+
+        self.log.debug("CreateGroupSnapshotRequests.finish: {}/{}/{}".format(
+            pool_id, namespace, group_id))
+
+        self.put_ioctx(group_spec)
+
+        with self.lock:
+            self.pending.remove(group_spec)
+            self.condition.notify()
+            if not self.queue:
+                self.log.debug("CreateGroupSnapshotRequests.finish: {}/{}/{} exiting from state machine".format(
+                    pool_id, namespace, group_id))
+                return
+            group_spec = self.queue.pop(0)
+
+        self.open_group(group_spec)
+
+    def get_ioctx(self, group_spec: GroupSpec) -> rados.Ioctx:
+        pool_id, namespace, group_id = group_spec
+        nspec = (pool_id, namespace)
+
+        with self.lock:
+            ioctx, groups = self.ioctxs.get(nspec, (None, None))
+            if not ioctx:
+                ioctx = self.rados.open_ioctx2(int(pool_id))
+                ioctx.set_namespace(namespace)
+                groups = set()
+                self.ioctxs[nspec] = (ioctx, groups)
+            assert groups is not None
+            groups.add(group_spec)
+
+        return ioctx
+
+    def put_ioctx(self, group_spec: GroupSpec) -> None:
+        pool_id, namespace, group_id = group_spec
+        nspec = (pool_id, namespace)
+
+        with self.lock:
+            ioctx, groups = self.ioctxs[nspec]
+            groups.remove(group_spec)
+            if not groups:
+                # ioctx.close()
+                del self.ioctxs[nspec]
+                self.log.debug("CreateGroupSnapshotRequests.put_ioctx: {}/{}/{} del self.ioctxs[nspec]".format(
+                    pool_id, namespace, group_id))
+
+
 class MirrorGroupSnapshotScheduleHandler:
     MODULE_OPTION_NAME = "mirror_group_snapshot_schedule"
+    MODULE_OPTION_NAME_MAX_CONCURRENT_GROUP_SNAP_CREATE = "max_concurrent_group_snap_create"
     SCHEDULE_OID = "rbd_mirror_group_snapshot_schedule"
     REFRESH_DELAY_SECONDS = 60.0
 
@@ -43,7 +198,7 @@ class MirrorGroupSnapshotScheduleHandler:
         self.module = module
         self.log = module.log
         self.last_refresh_groups = datetime(1970, 1, 1)
-        # self.create_snapshot_requests = CreateSnapshotRequests(self)
+        # self.create_snapshot_requests = CreateGroupSnapshotRequests(self)
 
         self.stop_thread = False
         self.thread = Thread(target=self.run)
@@ -76,6 +231,7 @@ class MirrorGroupSnapshotScheduleHandler:
                 self.create_group_snapshot(pool_id, namespace, group_id)
                 with self.lock:
                     self.enqueue(datetime.now(), pool_id, namespace, group_id)
+                self.log.info("MirrorGroupSnapshotScheduleHandler: released lock. done enqueue")
 
         except (rados.ConnectionShutdown, rbd.ConnectionShutdown):
             self.log.exception("MirrorGroupSnapshotScheduleHandler: client blocklisted")

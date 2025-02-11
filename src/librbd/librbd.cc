@@ -167,6 +167,13 @@ struct C_AioCompletion : public Context {
     aio_comp->init_time(ictx, aio_type);
     aio_comp->get();
   }
+  C_AioCompletion(librados::IoCtx& ioctx,
+                  librbd::io::AioCompletion* aio_comp)
+    : aio_type(librbd::io::AIO_TYPE_GROUP), aio_comp(aio_comp) {
+    cct = reinterpret_cast<CephContext *>(ioctx.cct());
+    aio_comp->init_time(ioctx, aio_type);
+    aio_comp->get();
+  }
   virtual ~C_AioCompletion() {
     aio_comp->put();
   }
@@ -8272,6 +8279,28 @@ extern "C" int rbd_aio_mirror_group_get_info(rados_ioctx_t group_p,
 
   auto ctx = new C_MirrorGroupGetInfo(
     info, new C_AioGroupCompletion(group_ioctx, comp));
+  librbd::api::Mirror<>::group_get_info(
+    group_ioctx, group_name, &ctx->cpp_mirror_group_info, ctx);
+  return 0;
+}
+
+extern "C" int rbd_aio_mirror_group_get_info2(rados_ioctx_t group_p,
+                                              const char *group_name,
+                                              rbd_mirror_group_info_t *info,
+                                              size_t info_size,
+                                              rbd_completion_t c) {
+  if (sizeof(rbd_mirror_group_info_t) != info_size) {
+    return -ERANGE;
+  }
+
+  librados::IoCtx group_ioctx;
+  librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
+
+  librbd::RBD::AioCompletion *comp = (librbd::RBD::AioCompletion *)c;
+
+  auto ctx = new C_MirrorGroupGetInfo(
+    info, new C_AioCompletion(group_ioctx,
+                              get_aio_completion(comp)));
   librbd::api::Mirror<>::group_get_info(
     group_ioctx, group_name, &ctx->cpp_mirror_group_info, ctx);
   return 0;

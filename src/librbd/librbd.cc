@@ -167,6 +167,13 @@ struct C_AioCompletion : public Context {
     aio_comp->init_time(ictx, aio_type);
     aio_comp->get();
   }
+  C_AioCompletion(std::unique_ptr<librados::IoCtx> group_ioctx,
+                  librbd::io::AioCompletion* aio_comp)
+    : aio_type(librbd::io::AIO_TYPE_GROUP), aio_comp(aio_comp) {
+    cct = reinterpret_cast<CephContext *>(group_ioctx->cct());
+    aio_comp->init_time(std::move(group_ioctx));
+    aio_comp->get();
+  }
   virtual ~C_AioCompletion() {
     aio_comp->put();
   }
@@ -8230,6 +8237,35 @@ extern "C" int rbd_aio_mirror_group_create_snapshot(
   return 0;
 }
 
+extern "C" int rbd_aio_mirror_group_create_snapshot2(
+    rados_ioctx_t group_p, const char *group_name, uint32_t flags,
+    char *snap_id, size_t *max_snap_id_len, rbd_completion_t c) {
+  if (*max_snap_id_len < RBD_MAX_IMAGE_ID_LENGTH + 1) {
+    *max_snap_id_len = RBD_MAX_IMAGE_ID_LENGTH + 1;
+    return -ERANGE;
+  }
+
+  *max_snap_id_len = RBD_MAX_IMAGE_ID_LENGTH + 1;
+
+  librados::IoCtx group_ioctx;
+  librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
+
+  std::unique_ptr<librados::IoCtx> group_ioctx_p = std::make_unique<librados::IoCtx>(group_ioctx);
+
+  librbd::RBD::AioCompletion *comp = (librbd::RBD::AioCompletion *)c;
+
+  auto ctx = new C_MirrorGroupCreateSnapshot(
+   snap_id, new C_AioCompletion(std::move(group_ioctx_p),
+                                get_aio_completion(comp)));
+
+  librbd::api::Mirror<>::group_snapshot_create(group_ioctx,
+                                               group_name,
+                                               flags,
+                                               &ctx->cpp_mirror_group_snap_id,
+                                               ctx);
+  return 0;
+}
+
 extern "C" int rbd_mirror_group_get_info(
     rados_ioctx_t group_p, const char *group_name,
     rbd_mirror_group_info_t *mirror_group_info, size_t info_size) {
@@ -8272,6 +8308,30 @@ extern "C" int rbd_aio_mirror_group_get_info(rados_ioctx_t group_p,
 
   auto ctx = new C_MirrorGroupGetInfo(
     info, new C_AioGroupCompletion(group_ioctx, comp));
+  librbd::api::Mirror<>::group_get_info(
+    group_ioctx, group_name, &ctx->cpp_mirror_group_info, ctx);
+  return 0;
+}
+
+extern "C" int rbd_aio_mirror_group_get_info2(rados_ioctx_t group_p,
+                                              const char *group_name,
+                                              rbd_mirror_group_info_t *info,
+                                              size_t info_size,
+                                              rbd_completion_t c) {
+  if (sizeof(rbd_mirror_group_info_t) != info_size) {
+    return -ERANGE;
+  }
+
+  librados::IoCtx group_ioctx;
+  librados::IoCtx::from_rados_ioctx_t(group_p, group_ioctx);
+
+  std::unique_ptr<librados::IoCtx> group_ioctx_p = std::make_unique<librados::IoCtx>(group_ioctx);
+
+  librbd::RBD::AioCompletion *comp = (librbd::RBD::AioCompletion *)c;
+
+  auto ctx = new C_MirrorGroupGetInfo(
+    info, new C_AioCompletion(std::move(group_ioctx_p),
+                              get_aio_completion(comp)));
   librbd::api::Mirror<>::group_get_info(
     group_ioctx, group_name, &ctx->cpp_mirror_group_info, ctx);
   return 0;

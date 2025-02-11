@@ -1664,6 +1664,12 @@ CEPH_RBD_API int rbd_aio_mirror_group_create_snapshot(rados_ioctx_t p,
                                                       char *snap_id,
                                                       size_t *max_snap_id_len,
                                                       rbd_completion_t c);
+CEPH_RBD_API int rbd_aio_mirror_group_create_snapshot2(rados_ioctx_t p,
+                                                       const char *name,
+                                                       uint32_t flags,
+                                                       char *snap_id,
+                                                       size_t *max_snap_id_len,
+                                                       rbd_completion_t c);
 CEPH_RBD_API int rbd_mirror_group_get_info(
     rados_ioctx_t p, const char *name,
     rbd_mirror_group_info_t *mirror_group_info, size_t info_size);
@@ -1675,6 +1681,10 @@ CEPH_RBD_API int rbd_mirror_group_get_global_status(
 CEPH_RBD_API void rbd_mirror_group_global_status_cleanup(
     rbd_mirror_group_global_status_t *mirror_group_status);
 CEPH_RBD_API int rbd_aio_mirror_group_get_info(
+    rados_ioctx_t p, const char *name,
+    rbd_mirror_group_info_t *mirror_group_info, size_t info_size,
+    rbd_completion_t c);
+CEPH_RBD_API int rbd_aio_mirror_group_get_info2(
     rados_ioctx_t p, const char *name,
     rbd_mirror_group_info_t *mirror_group_info, size_t info_size,
     rbd_completion_t c);

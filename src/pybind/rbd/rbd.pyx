@@ -2827,6 +2827,31 @@ cdef class Group(object):
         completion_obj.rbd_comp = completion
         return completion_obj
 
+    def __get_completion2(self, oncomplete):
+        """
+        Constructs a completion to use with asynchronous operations
+
+        :param oncomplete: callback for the completion
+
+        :raises: :class:`Error`
+        :returns: completion object
+        """
+
+        completion_obj = Completion(self, oncomplete)
+
+        cdef:
+            rbd_completion_t completion
+            PyObject* p_completion_obj= <PyObject*>completion_obj
+
+        with nogil:
+            ret = rbd_aio_create_completion(p_completion_obj, __aio_complete_cb,
+                                            &completion)
+        if ret < 0:
+            raise make_ex(ret, "error getting a completion")
+
+        completion_obj.rbd_comp = completion
+        return completion_obj
+
     def add_image(self, image_ioctx, image_name, flags=0):
         """
         Add an image to a group.
@@ -3127,6 +3152,58 @@ cdef class Group(object):
 
         return completion
 
+    def aio_mirror_group_create_snapshot2(self, flags, oncomplete):
+        """
+        Asynchronously create mirror group snapshot.
+
+        Raises :class:`InvalidArgument` if the group is not in mirror
+        snapshot mode.
+
+        oncomplete will be called with the created snap ID as
+        well as the completion:
+
+        oncomplete(completion, snap_id)
+
+        :param flags: create snapshot flags
+        :type flags: int
+        :param oncomplete: what to do when group snapshot creation is complete
+        :type oncomplete: completion
+        :returns: :class:`Completion` - the completion object
+        :raises: :class:`InvalidArgument`
+        """
+        cdef:
+            size_t max_snap_id_size = RBD_MAX_SNAP_ID_SIZE
+            uint32_t _flags = flags
+            Completion completion
+
+        def oncomplete_(completion_v):
+            cdef:
+                Completion _completion_v = completion_v
+            return_value = _completion_v.get_return_value()
+            if return_value == 0:
+                snap_id = decode_cstr(<char *>_completion_v.buf)
+            else:
+                snap_id = None
+            return oncomplete(_completion_v, snap_id)
+
+        completion = self.__get_completion2(oncomplete_)
+        completion.buf = PyBytes_FromStringAndSize(NULL, max_snap_id_size)
+        try:
+            completion.__persist()
+            with nogil:
+                ret = rbd_aio_mirror_group_create_snapshot2(
+                  self._ioctx, self._name, _flags, <char *>completion.buf,
+                  &max_snap_id_size, completion.rbd_comp)
+            if ret < 0:
+                raise make_ex(
+                    ret,
+                    'error creating mirror snapshot for group %s' % self.name)
+        except:
+            completion.__unpersist()
+            raise
+
+        return completion
+
     def mirror_group_get_info(self):
         """
         Get mirror info of the group.
@@ -3199,6 +3276,59 @@ cdef class Group(object):
             completion.__persist()
             with nogil:
                 ret = rbd_aio_mirror_group_get_info(
+                    self._ioctx, self._name,
+                    <rbd_mirror_group_info_t *>completion.buf,
+                    sizeof(rbd_mirror_group_info_t), completion.rbd_comp)
+            if ret != 0:
+                raise make_ex(
+                    ret, 'error getting mirror info of group %s' % self._name)
+        except:
+            completion.__unpersist()
+            raise
+
+        return completion
+
+    def aio_mirror_group_get_info2(self, oncomplete):
+        """
+         Asynchronously get mirror info of the group.
+
+        oncomplete will be called with the returned info as
+        well as the completion:
+
+        oncomplete(completion, info)
+
+        :param oncomplete: what to do when get info is complete
+        :type oncomplete: completion
+        :returns: :class:`Completion` - the completion object
+        """
+        cdef:
+            Completion completion
+
+        def oncomplete_(completion_v):
+            cdef:
+                Completion _completion_v = completion_v
+                rbd_mirror_group_info_t *c_info
+            return_value = _completion_v.get_return_value()
+            if return_value == 0:
+                c_info = <rbd_mirror_group_info_t *>_completion_v.buf
+                info = {
+                    'global_id'  : decode_cstr(c_info[0].global_id),
+                    'image_mode' : int(c_info[0].mirror_image_mode),
+                    'state'      : int(c_info[0].state),
+                    'primary'    : c_info[0].primary,
+                }
+                rbd_mirror_group_get_info_cleanup(c_info)
+            else:
+                info = None
+            return oncomplete(_completion_v, info)
+
+        completion = self.__get_completion2(oncomplete_)
+        completion.buf = PyBytes_FromStringAndSize(
+            NULL, sizeof(rbd_mirror_group_info_t))
+        try:
+            completion.__persist()
+            with nogil:
+                ret = rbd_aio_mirror_group_get_info2(
                     self._ioctx, self._name,
                     <rbd_mirror_group_info_t *>completion.buf,
                     sizeof(rbd_mirror_group_info_t), completion.rbd_comp)

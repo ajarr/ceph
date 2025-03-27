@@ -1257,6 +1257,23 @@ void Replayer<I>::finish_shut_down() {
   }
 }
 
+
+template <typename I>
+bool Replayer<I>::get_replay_status(std::string* description) {
+  dout(10) << dendl;
+
+  std::unique_lock locker{m_lock};
+  if (m_state != STATE_REPLAYING) {
+    locker.unlock();
+
+    derr << "replay not running" << dendl;
+    return false;
+  }
+
+  locker.unlock();
+  return true;
+}
+
 } // namespace group_replayer
 } // namespace mirror
 } // namespace rbd

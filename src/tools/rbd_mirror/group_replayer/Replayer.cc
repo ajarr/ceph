@@ -825,6 +825,8 @@ void Replayer<I>::handle_create_mirror_snapshot(
       m_local_group_snaps.erase(local_snap);
     }
   } else {
+    m_snapshot_start = ceph_clock_now();
+
     // if m_replayer in the ImageReplayer is null this cannot be forwarded.
     // May be we should retry this setting in the validate_image_snaps_sync_complete().
     // Same for image_replayer->prune_snapshot(); setting actually!!!!
@@ -891,6 +893,19 @@ template <typename I>
 void Replayer<I>::handle_mirror_snapshot_complete(
     int r, const std::string &group_snap_id, Context *on_finish) {
   dout(10) << group_snap_id << ", r=" << r << dendl;
+
+  if (r == 0) {
+    utime_t duration = ceph_clock_now() - m_snapshot_start;
+    m_last_snapshot_complete_seconds = duration.sec();
+
+    uint64_t last_snapshot_bytes = 0;
+    for (const auto& ir : *m_image_replayers) {
+      if (ir.second != nullptr) {
+	last_snapshot_bytes += ir.second->get_last_snapshot_bytes();
+      }
+    }
+    m_last_snapshot_bytes = last_snapshot_bytes;
+  }
 
   on_finish->complete(r);
 }
@@ -1323,6 +1338,29 @@ void Replayer<I>::finish_shut_down() {
   if (on_finish) {
     on_finish->complete(0);
   }
+}
+
+
+template <typename I>
+bool Replayer<I>::get_replay_status(std::string* description) {
+  dout(10) << dendl;
+
+  std::unique_lock locker{m_lock};
+  if (m_state != STATE_REPLAYING) {
+    locker.unlock();
+    derr << "replay not running" << dendl;
+    return false;
+  }
+
+  json_spirit::mObject root_obj;
+  root_obj["last_snapshot_complete_seconds"] = m_last_snapshot_complete_seconds;
+  root_obj["last_snapshot_bytes"] = m_last_snapshot_bytes;
+
+  *description = json_spirit::write(
+    root_obj, json_spirit::remove_trailing_zeros);
+
+  locker.unlock();
+  return true;
 }
 
 } // namespace group_replayer

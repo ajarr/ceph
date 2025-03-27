@@ -72,6 +72,8 @@ public:
     return (m_state == STATE_REPLAYING || m_state == STATE_IDLE);
   }
 
+  bool get_replay_status(std::string* description);
+
 private:
   enum State {
     STATE_INIT,

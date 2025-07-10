@@ -60,10 +60,8 @@ void CreatePrimaryRequest2<I>::send() {
           m_image_ctxs[i],
 	  ((m_flags & CREATE_PRIMARY_FLAG_DEMOTED) != 0),
 	  ((m_flags & CREATE_PRIMARY_FLAG_FORCE) != 0), nullptr, nullptr)) {
-
-    lderr(m_cct) << "cannot create primary snapshot for " << m_image_ctxs[i]->id
-               << dendl;
-
+      lderr(m_cct) << "cannot create primary snapshot for " << m_image_ctxs[i]->id
+                   << dendl;
       finish(-EINVAL);
       return;
     }
@@ -85,6 +83,7 @@ void CreatePrimaryRequest2<I>::send() {
     }
     m_snap_names[i] = ss.str();
   }
+
   get_mirror_peers();
 }
 
@@ -140,6 +139,91 @@ void CreatePrimaryRequest2<I>::handle_get_mirror_peers(int r) {
   }
 
   notify_quiesce();
+}
+
+template <typename I>
+void CreatePrimaryRequest2<I>::notify_quiesce() {
+
+  if (m_group_snap_id.empty()) {
+    create_snapshots();
+    return;
+  }
+  if ((m_snap_create_flags & SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE) != 0) {
+    acquire_exclusive_locks();
+    return;
+  }
+  ldout(m_cct, 15) << dendl;
+
+  // TODO (rraja): why is this?
+  // The individual image snaps do not need to quiesce.
+  m_snap_create_flags |= SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE;
+  auto ctx = create_context_callback<
+    CreatePrimaryRequest2<I>,
+    &CreatePrimaryRequest2<I>::handle_notify_quiesce>(this);
+  auto gather_ctx = new C_Gather(m_cct, ctx);
+
+  int image_count = m_image_ctxs.size();
+  m_quiesce_requests.resize(image_count);
+
+  for (int i = 0; i < image_count; ++i) {
+    auto ictx = (m_image_ctxs)[i];
+    ictx->image_watcher->notify_quiesce(&(m_quiesce_requests)[i], m_prog_ctx,
+                                        gather_ctx->new_sub());
+  }
+
+  gather_ctx->activate();
+
+}
+
+template <typename I>
+void CreatePrimaryRequest2<I>::handle_notify_quiesce(int r) {
+  ldout(m_cct, 15) << "r=" << r << dendl;
+
+  if (r < 0 &&
+      (m_snap_create_flags & SNAP_CREATE_FLAG_IGNORE_NOTIFY_QUIESCE_ERROR) == 0) {
+    m_ret_code = r;
+    notify_unquiesce();
+    return;
+  }
+  acquire_exclusive_locks();
+
+}
+
+template <typename I>
+void CreatePrimaryRequest2<I>::acquire_exclusive_locks() {
+  ldout(m_cct, 15) << dendl;
+
+  m_release_locks = true;
+
+  auto ctx = librbd::util::create_context_callback<
+    CreatePrimaryRequest2<I>,
+    &CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks>(this);
+  auto gather_ctx = new C_Gather(m_cct, ctx);
+
+  for (auto ictx: m_image_ctxs) {
+    std::shared_lock owner_lock{ictx->owner_lock};
+    if (ictx->exclusive_lock != nullptr) {
+      ictx->exclusive_lock->block_requests(-EBUSY);
+      ictx->exclusive_lock->acquire_lock(gather_ctx->new_sub());
+    }
+  }
+
+  gather_ctx->activate();
+}
+
+template <typename I>
+void CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks(int r) {
+  ldout(m_cct, 15) << "r=" << r << dendl;
+
+  if (r < 0) {
+    lderr(m_cct) << "failed to acquire image exclusive locks: "
+                 << cpp_strerror(r) << dendl;
+    m_ret_code = r;
+    notify_unquiesce();
+    return;
+  }
+
+  create_snapshots();
 }
 
 template <typename I>
@@ -227,6 +311,7 @@ void CreatePrimaryRequest2<I>::handle_refresh_images(int r) {
     release_exclusive_locks();
     return;
   }
+
   // Do not unlink snaps if the images are part of a group
   if (!m_group_snap_id.empty()) {
     release_exclusive_locks();
@@ -332,55 +417,40 @@ void CreatePrimaryRequest2<I>::handle_unlink_peer(int r) {
   unlink_peer();
 }
 
-
 template <typename I>
-void CreatePrimaryRequest2<I>::notify_quiesce() {
-
-  if (m_group_snap_id.empty()) {
-    create_snapshots();
-    return;
-  }
-  if ((m_snap_create_flags & SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE) != 0) {
-    acquire_exclusive_locks();
-    return;
-  }
+void CreatePrimaryRequest2<I>::release_exclusive_locks() {
   ldout(m_cct, 15) << dendl;
 
-  // The individual image snaps do not need to quiesce.
-  m_snap_create_flags |= SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE;
-  auto ctx = create_context_callback<
+  if(!m_release_locks){
+    notify_unquiesce();
+    return;
+  }
+  auto ctx = librbd::util::create_context_callback<
     CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_notify_quiesce>(this);
+    &CreatePrimaryRequest2<I>::handle_release_exclusive_locks>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
-  int image_count = m_image_ctxs.size();
-  m_quiesce_requests.resize(image_count);
-
-  for (int i = 0; i < image_count; ++i) {
-    auto ictx = (m_image_ctxs)[i];
-    ictx->image_watcher->notify_quiesce(&(m_quiesce_requests)[i], m_prog_ctx,
-                                        gather_ctx->new_sub());
+  for (auto ictx: m_image_ctxs) {
+    std::shared_lock owner_lock{ictx->owner_lock};
+    if (ictx->exclusive_lock != nullptr) {
+      ictx->exclusive_lock->release_lock(gather_ctx->new_sub());
+    }
   }
 
   gather_ctx->activate();
 
 }
 
-
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_notify_quiesce(int r) {
+void CreatePrimaryRequest2<I>::handle_release_exclusive_locks(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
-  if (r < 0 &&
-      (m_snap_create_flags & SNAP_CREATE_FLAG_IGNORE_NOTIFY_QUIESCE_ERROR) == 0) {
-    m_ret_code = r;
-    notify_unquiesce();
-    return;
+  if (r < 0) {
+    lderr(m_cct) << "failed to release exclusive locks for images: "
+                 << cpp_strerror(r) << dendl;
   }
-  acquire_exclusive_locks();
-
+  notify_unquiesce();
 }
-
 
 template <typename I>
 void CreatePrimaryRequest2<I>::notify_unquiesce() {
@@ -420,79 +490,6 @@ void CreatePrimaryRequest2<I>::handle_notify_unquiesce(int r) {
   }
   finish(m_ret_code);
 }
-
-template <typename I>
-void CreatePrimaryRequest2<I>::acquire_exclusive_locks() {
-  ldout(m_cct, 15) << dendl;
-
-  m_release_locks = true;
-
-  auto ctx = librbd::util::create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks>(this);
-  auto gather_ctx = new C_Gather(m_cct, ctx);
-
-  for (auto ictx: m_image_ctxs) {
-    std::shared_lock owner_lock{ictx->owner_lock};
-    if (ictx->exclusive_lock != nullptr) {
-      ictx->exclusive_lock->block_requests(-EBUSY);
-      ictx->exclusive_lock->acquire_lock(gather_ctx->new_sub());
-    }
-  }
-
-  gather_ctx->activate();
-}
-
-template <typename I>
-void CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks(int r) {
-  ldout(m_cct, 15) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(m_cct) << "failed to acquire image exclusive locks: "
-                 << cpp_strerror(r) << dendl;
-    m_ret_code = r;
-    notify_unquiesce();
-    return;
-  }
-
-  create_snapshots();
-}
-
-template <typename I>
-void CreatePrimaryRequest2<I>::release_exclusive_locks() {
-  ldout(m_cct, 15) << dendl;
-
-  if(!m_release_locks){
-    notify_unquiesce();
-    return;
-  }
-  auto ctx = librbd::util::create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_release_exclusive_locks>(this);
-  auto gather_ctx = new C_Gather(m_cct, ctx);
-
-  for (auto ictx: m_image_ctxs) {
-    std::shared_lock owner_lock{ictx->owner_lock};
-    if (ictx->exclusive_lock != nullptr) {
-      ictx->exclusive_lock->release_lock(gather_ctx->new_sub());
-    }
-  }
-
-  gather_ctx->activate();
-
-}
-
-template <typename I>
-void CreatePrimaryRequest2<I>::handle_release_exclusive_locks(int r) {
-  ldout(m_cct, 15) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(m_cct) << "failed to release exclusive locks for images: "
-                 << cpp_strerror(r) << dendl;
-  }
-  notify_unquiesce();
-}
-
 
 template <typename I>
 void CreatePrimaryRequest2<I>::finish(int r) {

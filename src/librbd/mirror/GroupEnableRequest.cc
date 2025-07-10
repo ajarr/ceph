@@ -92,10 +92,11 @@ void GroupEnableRequest<I>::handle_get_mirror_group(int r) {
       ldout(m_cct, 10) << "mirroring either in progress or was interrupted"
                        << dendl;
       r = -EINVAL;
-    } else {
+    } else if (m_mirror_group.state == cls::rbd::MIRROR_GROUP_STATE_DISABLING) {
       lderr(m_cct) << "currently disabling" << dendl;
       r = -EINVAL;
     }
+    // TODO: Handling MIRROR_GROUP_STATE_CREATING
     finish(r);
     return;
   } else if (r != -ENOENT) {
@@ -110,6 +111,8 @@ void GroupEnableRequest<I>::handle_get_mirror_group(int r) {
   m_mirror_group.global_group_id = uuid_gen.to_string();
   m_mirror_group.mirror_image_mode = m_mode;
   m_mirror_group.state = cls::rbd::MIRROR_GROUP_STATE_ENABLING;
+
+  //TODO: set this m_mirror_group on-disk
 
   get_mirror_peer_list();
 }
@@ -155,6 +158,7 @@ void GroupEnableRequest<I>::handle_get_mirror_peer_list(int r) {
       continue;
     }
     m_mirror_peer_uuids.insert(peer.uuid);
+    //TODO (rraja): maybe restructure this for loop?
   }
 
   if (m_mirror_peer_uuids.empty()) {
@@ -242,10 +246,13 @@ void GroupEnableRequest<I>::handle_get_mirror_images(int r) {
   ldout(m_cct, 10) << "r=" << r <<  dendl;
   if (r < 0) {
     ldout(m_cct, 10) << "failed to get mirror image info" << dendl;
+    /// TODO (rraja): just finish here? no images are opened to close them
     close_images();
     return;
   }
 
+  //TODO (rraja): where is m_cleanup_image_states set?
+  // This is set in `handle_update_mirror_image_states()`
   if (m_cleanup_image_states) {
     disable_mirror_images();
     return;
@@ -253,7 +260,7 @@ void GroupEnableRequest<I>::handle_get_mirror_images(int r) {
 
   for (size_t i = 0; i < m_mirror_images.size(); i++) {
     if (m_mirror_images[i].state != cls::rbd::MIRROR_IMAGE_STATE_DISABLED) {
-      lderr(m_cct) << "image is already mirror enabled: "
+      lderr(m_cct) << "image is not disabled for mirroring: "
                    << m_images[i].spec.image_id << dendl;
       finish(-EINVAL);
       return;
@@ -311,6 +318,10 @@ void GroupEnableRequest<I>::handle_open_images(int r) {
   if (m_ret_val < 0) {
     lderr(m_cct) << "failed to open group images: " << cpp_strerror(m_ret_val)
                  << dendl;
+    // TODO (rraja): The contract is that if asynchronous ImageState::open()
+    // fails, ImageState together with ImageCtx is destroyed, so nothing needs
+    // to be called. You can simply NULL-out the respective image_ctxs[i]
+    // pointer to record that it's no longer valid and proceed.
     close_images();
     return;
   }
@@ -391,43 +402,10 @@ void GroupEnableRequest<I>::handle_create_primary_group_snapshot(int r) {
     return;
   }
 
+  // TODO (rraja): Setting ENABLING mirror group state on-disk after creating
+  // incomplete group snap is different from previous order of operations. The
+  // order is swapped. Is this okay?
   set_mirror_group();
-}
-
-template <typename I>
-void GroupEnableRequest<I>::update_primary_group_snapshot() {
-  ldout(m_cct, 10) << dendl;
-
-  for (size_t i = 0; i < m_image_ctxs.size(); i++) {
-    m_group_snap.snaps[i].snap_id = m_snap_ids[i];
-  }
-
-  m_group_snap.state = cls::rbd::GROUP_SNAPSHOT_STATE_COMPLETE;
-  librados::ObjectWriteOperation op;
-  cls_client::group_snap_set(&op, m_group_snap);
-
-  auto aio_comp = create_rados_callback<
-    GroupEnableRequest<I>,
-    &GroupEnableRequest<I>::handle_update_primary_group_snapshot>(this);
-  int r = m_group_ioctx.aio_operate(librbd::util::group_header_name(m_group_id),
-                                     aio_comp, &op);
-  ceph_assert(r == 0);
-  aio_comp->release();
-}
-
-
-template <typename I>
-void GroupEnableRequest<I>::handle_update_primary_group_snapshot(int r) {
-  ldout(m_cct, 10) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(m_cct) << "failed to create group snapshot: "
-                 << cpp_strerror(r) << dendl;
-    disable_mirror_group();
-    return;
-  }
-
-  update_mirror_image_states();
 }
 
 template <typename I>
@@ -457,6 +435,8 @@ void GroupEnableRequest<I>::handle_set_mirror_group(int r) {
     if(m_mirror_group.state == cls::rbd::MIRROR_GROUP_STATE_ENABLING) {
       remove_primary_group_snapshot();
     } else {
+      // TODO (rraja): This branch is reached after call from `update_mirror_image_states()`
+      // However can it be any other state besides ENABLED in this branch
       disable_mirror_group();
     }
     return;
@@ -464,8 +444,9 @@ void GroupEnableRequest<I>::handle_set_mirror_group(int r) {
 
   if (m_mirror_group.state == cls::rbd::MIRROR_GROUP_STATE_ENABLING) {
     create_primary_image_snapshots();
-    return;
   } else {
+    // TODO (rraja): This branch is reached after call from `update_mirror_image_states()`
+    // However can it be any other state besides ENABLED in this branch
     notify_mirroring_watcher();
   }
 }
@@ -496,7 +477,15 @@ void GroupEnableRequest<I>::create_primary_image_snapshots() {
   m_snap_ids.resize(m_image_ctxs.size(), CEPH_NOSNAP);
   m_clean_since_snap_ids.resize(m_image_ctxs.size(), CEPH_NOSNAP);
 
+  // (rraja): do we need to fetch the m_snap_create_flags as done in
+  // EnableRequest<I>::create_primary_snapshot()
+  // int r = util::snap_create_flags_api_to_internal(
+  //   m_cct, util::get_default_snap_create_flags(m_image_ctx),
+  //   &snap_create_flags);
+  // ceph_assert(r == 0);
+
   m_snap_create_flags = 0;
+  // quiescing and requesting exclusive locks of images
   auto req = snapshot::CreatePrimaryRequest2<I>::create(m_image_ctxs,
                                       m_global_image_ids,
                                       m_clean_since_snap_ids,
@@ -505,7 +494,6 @@ void GroupEnableRequest<I>::create_primary_image_snapshots() {
                                       m_group_snap.id,
                                       m_snap_ids, ctx);
   req->send();
-
 }
 
 template <typename I>
@@ -524,12 +512,50 @@ void GroupEnableRequest<I>::handle_create_primary_image_snapshots(int r) {
       m_group_snap.snaps[i].snap_id = m_snap_ids[i];
     }
 
+    // TODO (rraja): where are create primary image snapshots cleaned up?
+    // I think they need to be cleaned up within CreatePrimaryRequest2?
     disable_mirror_group();
     return;
   }
 
   update_primary_group_snapshot();
 }
+
+template <typename I>
+void GroupEnableRequest<I>::update_primary_group_snapshot() {
+  ldout(m_cct, 10) << dendl;
+
+  for (size_t i = 0; i < m_image_ctxs.size(); i++) {
+    m_group_snap.snaps[i].snap_id = m_snap_ids[i];
+  }
+
+  m_group_snap.state = cls::rbd::GROUP_SNAPSHOT_STATE_COMPLETE;
+  librados::ObjectWriteOperation op;
+  cls_client::group_snap_set(&op, m_group_snap);
+
+  auto aio_comp = create_rados_callback<
+    GroupEnableRequest<I>,
+    &GroupEnableRequest<I>::handle_update_primary_group_snapshot>(this);
+  int r = m_group_ioctx.aio_operate(librbd::util::group_header_name(m_group_id),
+                                     aio_comp, &op);
+  ceph_assert(r == 0);
+  aio_comp->release();
+}
+
+template <typename I>
+void GroupEnableRequest<I>::handle_update_primary_group_snapshot(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
+
+  if (r < 0) {
+    lderr(m_cct) << "failed to create group snapshot: "
+                 << cpp_strerror(r) << dendl;
+    disable_mirror_group();
+    return;
+  }
+
+  update_mirror_image_states();
+}
+
 
 template <typename I>
 void GroupEnableRequest<I>::update_mirror_image_states() {
@@ -616,6 +642,7 @@ void GroupEnableRequest<I>::close_images() {
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
   for (auto ictx: m_image_ctxs) {
+    // TODO: check imagectx is nullptr before trying to close it
     ictx->state->close(gather_ctx->new_sub());
   }
 
@@ -633,40 +660,37 @@ void GroupEnableRequest<I>::handle_close_images(int r) {
     }
   }
 
-  if (m_ret_val < 0) {
-    finish(m_ret_val);
-    return;
-  }
-
-  finish(0);
+  finish(m_ret_val);
 }
 
 template <typename I>
-void GroupEnableRequest<I>::remove_primary_group_snapshot() {
+void GroupEnableRequest<I>::disable_mirror_group() {
   ldout(m_cct, 10) << dendl;
 
-  auto ctx = create_context_callback<
+  librados::ObjectWriteOperation op;
+  m_mirror_group.state = cls::rbd::MIRROR_GROUP_STATE_DISABLING;
+
+  cls_client::mirror_group_set(&op, m_group_id, m_mirror_group);
+  auto aio_comp = create_rados_callback<
     GroupEnableRequest<I>,
-    &GroupEnableRequest<I>::handle_remove_primary_group_snapshot>(this);
+    &GroupEnableRequest<I>::handle_disable_mirror_group>(this);
+  int r = m_group_ioctx.aio_operate(RBD_MIRRORING, aio_comp, &op);
+  ceph_assert(r == 0);
+  aio_comp->release();
 
-  auto req = snapshot::RemoveGroupSnapshotRequest<I>::create (m_group_ioctx,
-     m_group_id, &m_group_snap, &m_image_ctxs, ctx);
-
-  req->send();
 }
 
-
 template <typename I>
-void GroupEnableRequest<I>::handle_remove_primary_group_snapshot(int r) {
+void GroupEnableRequest<I>::handle_disable_mirror_group(int r) {
   ldout(m_cct, 10) << "r=" << r << dendl;
 
   if (r < 0) {
-    lderr(m_cct) << "failed to remove mirror group snapshot: " << cpp_strerror(r)
+    lderr(m_cct) << "failed to disable mirror group: " << cpp_strerror(r)
                  << dendl;
     close_images();
     return;
   }
-  remove_image_states();
+  cleanup_mirror_images();
 }
 
 template <typename I>
@@ -717,7 +741,40 @@ void GroupEnableRequest<I>::handle_disable_mirror_images(int r) {
 }
 
 template <typename I>
+void GroupEnableRequest<I>::remove_primary_group_snapshot() {
+  ldout(m_cct, 10) << dendl;
+
+  auto ctx = create_context_callback<
+    GroupEnableRequest<I>,
+    &GroupEnableRequest<I>::handle_remove_primary_group_snapshot>(this);
+
+  auto req = snapshot::RemoveGroupSnapshotRequest<I>::create (m_group_ioctx,
+     m_group_id, &m_group_snap, &m_image_ctxs, ctx);
+
+  req->send();
+}
+
+template <typename I>
+void GroupEnableRequest<I>::handle_remove_primary_group_snapshot(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
+
+  if (r < 0) {
+    lderr(m_cct) << "failed to remove mirror group snapshot: " << cpp_strerror(r)
+                 << dendl;
+    close_images();
+    return;
+  }
+  // TODO (rraja): after creating incomplete group snap, if setting mirror
+  // group to incomplete fails, just removing primary group snapshot, and then
+  // closing images should be sufficient.  
+  remove_image_states();
+}
+
+
+template <typename I>
 void GroupEnableRequest<I>::remove_image_states() {
+// (rraja): Why is this called remove_image_states when you're actually
+// removing mirrorimages?
 
   if (!m_cleanup_image_states) {
     remove_mirror_group();
@@ -752,35 +809,6 @@ void GroupEnableRequest<I>::handle_remove_image_states(int r) {
   remove_mirror_group();
 }
 
-template <typename I>
-void GroupEnableRequest<I>::disable_mirror_group() {
-  ldout(m_cct, 10) << dendl;
-
-  librados::ObjectWriteOperation op;
-  m_mirror_group.state = cls::rbd::MIRROR_GROUP_STATE_DISABLING;
-
-  cls_client::mirror_group_set(&op, m_group_id, m_mirror_group);
-  auto aio_comp = create_rados_callback<
-    GroupEnableRequest<I>,
-    &GroupEnableRequest<I>::handle_disable_mirror_group>(this);
-  int r = m_group_ioctx.aio_operate(RBD_MIRRORING, aio_comp, &op);
-  ceph_assert(r == 0);
-  aio_comp->release();
-
-}
-
-template <typename I>
-void GroupEnableRequest<I>::handle_disable_mirror_group(int r) {
-  ldout(m_cct, 10) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(m_cct) << "failed to disable mirror group: " << cpp_strerror(r)
-                 << dendl;
-    close_images();
-    return;
-  }
-  cleanup_mirror_images();
-}
 
 template <typename I>
 void GroupEnableRequest<I>::remove_mirror_group() {

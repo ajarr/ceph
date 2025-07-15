@@ -1,7 +1,7 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 
-#include "librbd/mirror/snapshot/CreatePrimaryRequest2.h"
+#include "librbd/mirror/snapshot/GroupImageCreatePrimaryRequest.h"
 #include "common/dout.h"
 #include "common/errno.h"
 #include "cls/rbd/cls_rbd_client.h"
@@ -11,7 +11,6 @@
 #include "librbd/ImageWatcher.h"
 #include "librbd/Operations.h"
 #include "librbd/Utils.h"
-#include "librbd/mirror/snapshot/UnlinkPeerRequest.h"
 #include "librbd/mirror/snapshot/Utils.h"
 
 #include <shared_mutex> // for std::shared_lock
@@ -19,7 +18,7 @@
 #define dout_subsys ceph_subsys_rbd
 
 #undef dout_prefix
-#define dout_prefix *_dout << "librbd::mirror::snapshot::CreatePrimaryRequest2: " \
+#define dout_prefix *_dout << "librbd::mirror::snapshot::GroupImageCreatePrimaryRequest: " \
                            << this << " " << __func__ << ": "
 
 namespace librbd {
@@ -30,7 +29,7 @@ using librbd::util::create_context_callback;
 using librbd::util::create_rados_callback;
 
 template <typename I>
-CreatePrimaryRequest2<I>::CreatePrimaryRequest2(
+GroupImageCreatePrimaryRequest<I>::GroupImageCreatePrimaryRequest(
     std::vector<I *>&image_ctxs, std::vector<std::string> &global_image_ids,
     std::vector<uint64_t> &clean_since_snap_ids, uint64_t snap_create_flags,
     uint32_t flags, const std::string &group_snap_id,
@@ -47,13 +46,14 @@ CreatePrimaryRequest2<I>::CreatePrimaryRequest2(
   }
 
   m_cct = m_image_ctxs[0]->cct;
-//FIXME: using the first image_ctx pool for now
+
+  //FIXME: using the first image_ctx pool for now
   m_default_ns_ctx.dup(m_image_ctxs[0]->md_ctx);
   m_default_ns_ctx.set_namespace("");
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::send() {
+void GroupImageCreatePrimaryRequest<I>::send() {
   size_t i = 0;
   for (; i < m_image_ctxs.size(); i++) {
     if (!util::can_create_primary_snapshot(
@@ -71,16 +71,10 @@ void CreatePrimaryRequest2<I>::send() {
 
   for (i = 0; i < m_image_ctxs.size(); i++) {
     std::stringstream ss;
-    ss << ".mirror.primary." << m_global_image_ids[i] << ".";
-    if (!m_group_snap_id.empty()) {
-      ss << m_image_ctxs[i]->group_spec.pool_id << "_"
-	 << m_image_ctxs[i]->group_spec.group_id << "_"
-	<< m_group_snap_id;
-    } else {
-      uuid_d uuid_gen;
-      uuid_gen.generate_random();
-      ss << uuid_gen.to_string();
-    }
+    ss << ".mirror.primary." << m_global_image_ids[i] << "."
+       << m_image_ctxs[i]->group_spec.pool_id << "_"
+       << m_image_ctxs[i]->group_spec.group_id << "_"
+       << m_group_snap_id;
     m_snap_names[i] = ss.str();
   }
 
@@ -88,7 +82,7 @@ void CreatePrimaryRequest2<I>::send() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::get_mirror_peers() {
+void GroupImageCreatePrimaryRequest<I>::get_mirror_peers() {
   ldout(m_cct, 15) << dendl;
 
 //FIXME : mirror peers will be different for images in different pools
@@ -99,8 +93,8 @@ void CreatePrimaryRequest2<I>::get_mirror_peers() {
   cls_client::mirror_peer_list_start(&op);
 
   librados::AioCompletion *comp = create_rados_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_get_mirror_peers>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_get_mirror_peers>(this);
   m_out_bl.clear();
   int r = m_default_ns_ctx.aio_operate(RBD_MIRRORING, comp, &op, &m_out_bl);
   ceph_assert(r == 0);
@@ -108,7 +102,7 @@ void CreatePrimaryRequest2<I>::get_mirror_peers() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_get_mirror_peers(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_get_mirror_peers(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   std::vector<cls::rbd::MirrorPeer> peers;
@@ -138,28 +132,25 @@ void CreatePrimaryRequest2<I>::handle_get_mirror_peers(int r) {
     return;
   }
 
-  notify_quiesce();
-}
-
-template <typename I>
-void CreatePrimaryRequest2<I>::notify_quiesce() {
-
-  if (m_group_snap_id.empty()) {
-    create_snapshots();
-    return;
-  }
   if ((m_snap_create_flags & SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE) != 0) {
     acquire_exclusive_locks();
     return;
   }
+
+  notify_quiesce();
+}
+
+template <typename I>
+void GroupImageCreatePrimaryRequest<I>::notify_quiesce() {
+
   ldout(m_cct, 15) << dendl;
 
   // TODO (rraja): why is this?
   // The individual image snaps do not need to quiesce.
   m_snap_create_flags |= SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE;
   auto ctx = create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_notify_quiesce>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_notify_quiesce>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
   int image_count = m_image_ctxs.size();
@@ -176,7 +167,7 @@ void CreatePrimaryRequest2<I>::notify_quiesce() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_notify_quiesce(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_notify_quiesce(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   if (r < 0 &&
@@ -185,19 +176,19 @@ void CreatePrimaryRequest2<I>::handle_notify_quiesce(int r) {
     notify_unquiesce();
     return;
   }
-  acquire_exclusive_locks();
 
+  acquire_exclusive_locks();
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::acquire_exclusive_locks() {
+void GroupImageCreatePrimaryRequest<I>::acquire_exclusive_locks() {
   ldout(m_cct, 15) << dendl;
 
   m_release_locks = true;
 
   auto ctx = librbd::util::create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_acquire_exclusive_locks>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
   for (auto ictx: m_image_ctxs) {
@@ -212,7 +203,7 @@ void CreatePrimaryRequest2<I>::acquire_exclusive_locks() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_acquire_exclusive_locks(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   if (r < 0) {
@@ -227,11 +218,11 @@ void CreatePrimaryRequest2<I>::handle_acquire_exclusive_locks(int r) {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::create_snapshots() {
+void GroupImageCreatePrimaryRequest<I>::create_snapshots() {
 
   auto ctx = create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_create_snapshots>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_create_snapshots>(this);
 
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
@@ -256,7 +247,7 @@ void CreatePrimaryRequest2<I>::create_snapshots() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_create_snapshots(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_create_snapshots(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   if (r < 0) {
@@ -265,21 +256,21 @@ void CreatePrimaryRequest2<I>::handle_create_snapshots(int r) {
     if (m_ret_code == 0) {
       m_ret_code = r;
     }
-  //Refresh the images anyway so we can return any available snap_ids.
+    //Refresh the images anyway so we can return any available snap_ids.
   }
 
   refresh_images();
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::refresh_images() {
+void GroupImageCreatePrimaryRequest<I>::refresh_images() {
   // refresh is required to retrieve the snapshot id (if snapshot
   // created via remote RPC) and complete flag (regardless)
   ldout(m_cct, 15) << dendl;
 
   auto ctx = create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_refresh_images>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_refresh_images>(this);
 
   auto gather_ctx = new C_Gather(m_cct, ctx);
   for (size_t i = 0; i < m_image_ctxs.size(); i++) {
@@ -289,145 +280,39 @@ void CreatePrimaryRequest2<I>::refresh_images() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_refresh_images(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_refresh_images(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
-  if (!m_group_snap_id.empty()) {
-    for (size_t i = 0; i < m_image_ctxs.size(); i++) {
-      std::shared_lock image_locker{m_image_ctxs[i]->image_lock};
+  for (size_t i = 0; i < m_image_ctxs.size(); i++) {
+    std::shared_lock image_locker{m_image_ctxs[i]->image_lock};
 
-      ldout(m_cct, 15) << "snap_name=" << m_snap_names[i] << dendl;
-      auto snap_id = m_image_ctxs[i]->get_snap_id(
-        cls::rbd::MirrorSnapshotNamespace{}, m_snap_names[i]);
-      m_snap_ids[i] = snap_id;
-      ldout(m_cct, 15) << "image_id: " <<  m_image_ctxs[i]->id
-                       << ", snap_id=" << snap_id << dendl;
-    }
+    ldout(m_cct, 15) << "snap_name=" << m_snap_names[i] << dendl;
+    auto snap_id = m_image_ctxs[i]->get_snap_id(
+      cls::rbd::MirrorSnapshotNamespace{}, m_snap_names[i]);
+    m_snap_ids[i] = snap_id;
+    ldout(m_cct, 15) << "image_id: " <<  m_image_ctxs[i]->id
+                     << ", snap_id=" << snap_id << dendl;
   }
 
   if (r < 0) {
     lderr(m_cct) << "failed to refresh images: " << cpp_strerror(r) << dendl;
-    // TO DO : if refresh failed, there may be a leftover mirror snapshot
-    release_exclusive_locks();
-    return;
   }
 
-  // Do not unlink snaps if the images are part of a group
-  if (!m_group_snap_id.empty()) {
-    release_exclusive_locks();
-    return;
-  }
-
-  unlink_peer();
+  release_exclusive_locks();
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::unlink_peer() {
-  // TODO: Document semantics for unlink_peer
-  uint64_t max_snapshots = m_image_ctxs[0]->config.template get_val<uint64_t>(
-    "rbd_mirroring_max_mirroring_snapshots");
-  ceph_assert(max_snapshots >= 3);
-
-  std::string peer_uuid;
-  uint64_t snap_id = CEPH_NOSNAP;
-
-  {
-    std::shared_lock image_locker{m_image_ctxs[0]->image_lock};
-    for (const auto& peer : m_mirror_peer_uuids) {
-      for (const auto& snap_info_pair : m_image_ctxs[0]->snap_info) {
-        auto info = std::get_if<cls::rbd::MirrorSnapshotNamespace>(
-          &snap_info_pair.second.snap_namespace);
-        if (info == nullptr) {
-          continue;
-        }
-        if (info->mirror_peer_uuids.empty() ||
-            (info->mirror_peer_uuids.count(peer) != 0 &&
-             info->is_primary() && !info->complete)) {
-          if (info->group_spec.is_valid() || !info->group_snap_id.empty()) {
-            // snap is part of a group snap
-            continue;
-          }
-          peer_uuid = peer;
-          snap_id = snap_info_pair.first;
-          goto do_unlink;
-        }
-      }
-    }
-    for (const auto& peer : m_mirror_peer_uuids) {
-      size_t count = 0;
-      uint64_t unlink_snap_id = 0;
-      for (const auto& snap_info_pair : m_image_ctxs[0]->snap_info) {
-        auto info = std::get_if<cls::rbd::MirrorSnapshotNamespace>(
-          &snap_info_pair.second.snap_namespace);
-        if (info == nullptr) {
-          continue;
-        }
-        if (info->state != cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY) {
-          // reset counters -- we count primary snapshots after the last
-          // promotion
-          count = 0;
-          unlink_snap_id = 0;
-          continue;
-        }
-        if (info->mirror_peer_uuids.count(peer) == 0) {
-          // snapshot is not linked with this peer
-          continue;
-        }
-        if (info->group_spec.is_valid() || !info->group_snap_id.empty()) {
-          // snap is part of a group snap
-          continue;
-        }
-        count++;
-        if (count == max_snapshots) {
-          unlink_snap_id = snap_info_pair.first;
-        }
-        if (count > max_snapshots) {
-          peer_uuid = peer;
-          snap_id = unlink_snap_id;
-          goto do_unlink;
-        }
-      }
-    }
-  }
-
-  finish(0);
-  return;
-
-do_unlink:
-  ldout(m_cct, 15) << "peer=" << peer_uuid << ", snap_id=" << snap_id << dendl;
-
-  auto ctx = create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_unlink_peer>(this);
-  auto req = UnlinkPeerRequest<I>::create(m_image_ctxs[0], snap_id, peer_uuid, true,
-                                          ctx);
-  req->send();
-}
-
-template <typename I>
-void CreatePrimaryRequest2<I>::handle_unlink_peer(int r) {
-  ldout(m_cct, 15) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(m_cct) << "failed to unlink peer: " << cpp_strerror(r) << dendl;
-    finish(0); // not fatal
-    return;
-  }
-
-  unlink_peer();
-}
-
-template <typename I>
-void CreatePrimaryRequest2<I>::release_exclusive_locks() {
+void GroupImageCreatePrimaryRequest<I>::release_exclusive_locks() {
   ldout(m_cct, 15) << dendl;
 
-  if(!m_release_locks){
+  if (!m_release_locks) {
     notify_unquiesce();
     return;
   }
+
   auto ctx = librbd::util::create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_release_exclusive_locks>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_release_exclusive_locks>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
   for (auto ictx: m_image_ctxs) {
@@ -438,22 +323,22 @@ void CreatePrimaryRequest2<I>::release_exclusive_locks() {
   }
 
   gather_ctx->activate();
-
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_release_exclusive_locks(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_release_exclusive_locks(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   if (r < 0) {
     lderr(m_cct) << "failed to release exclusive locks for images: "
                  << cpp_strerror(r) << dendl;
   }
+
   notify_unquiesce();
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::notify_unquiesce() {
+void GroupImageCreatePrimaryRequest<I>::notify_unquiesce() {
 
   if (m_quiesce_requests.empty()) {
     finish(m_ret_code);
@@ -465,8 +350,8 @@ void CreatePrimaryRequest2<I>::notify_unquiesce() {
   ceph_assert(m_quiesce_requests.size() == m_image_ctxs.size());
 
   auto ctx = librbd::util::create_context_callback<
-    CreatePrimaryRequest2<I>,
-    &CreatePrimaryRequest2<I>::handle_notify_unquiesce>(this);
+    GroupImageCreatePrimaryRequest<I>,
+    &GroupImageCreatePrimaryRequest<I>::handle_notify_unquiesce>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
   int image_count = m_image_ctxs.size();
@@ -481,18 +366,19 @@ void CreatePrimaryRequest2<I>::notify_unquiesce() {
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::handle_notify_unquiesce(int r) {
+void GroupImageCreatePrimaryRequest<I>::handle_notify_unquiesce(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   if (r < 0) {
     lderr(m_cct) << "failed to unquiesce requests: "
                  << cpp_strerror(r) << dendl;
   }
+
   finish(m_ret_code);
 }
 
 template <typename I>
-void CreatePrimaryRequest2<I>::finish(int r) {
+void GroupImageCreatePrimaryRequest<I>::finish(int r) {
   ldout(m_cct, 15) << "r=" << r << dendl;
 
   m_on_finish->complete(r);
@@ -503,4 +389,4 @@ void CreatePrimaryRequest2<I>::finish(int r) {
 } // namespace mirror
 } // namespace librbd
 
-template class librbd::mirror::snapshot::CreatePrimaryRequest2<librbd::ImageCtx>;
+template class librbd::mirror::snapshot::GroupImageCreatePrimaryRequest<librbd::ImageCtx>;

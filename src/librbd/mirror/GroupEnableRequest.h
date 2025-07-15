@@ -53,6 +53,9 @@ private:
    * GET_MIRROR_IMAGES * * * * * * * * * * *
    *    |                                  *
    *    v  (skip if not needed)            *
+   * CHECK_MIRROR_IMAGES_DISABLED  * * * * *
+   *    |                                  *
+   *    v  (skip if not needed)            *
    * OPEN_IMAGES   * * * * * * * * * * * * *
    *    |                                  *
    *    v  (skip if not needed)            *
@@ -61,8 +64,8 @@ private:
    *    v (incomplete)                     *
    * CREATE_PRIMARY_GROUP_SNAP * * * * * * *
    *    |                                  *
-   *    v (enabling)                       *
-   * SET_MIRROR_GROUP  * * * * * * * * * * *
+   *    v                                  *
+   * SET_MIRROR_GROUP_ENABLING * * * * * * * 
    *    |                                  *
    *    v (skip if not needed)             *
    * CREATE_PRIMARY_IMAGE_SNAPS            *
@@ -71,10 +74,10 @@ private:
    * UPDATE_PRIMARY_GROUP_SNAP * * * * * * *
    *    |                                  *
    *    v (skip if not needed)             *
-   * UPDATE_MIRROR_IMAGE_STATES  * * * * * *
+   * SET_MIRROR_IMAGES_ENABLED * * * * * * *
    *    |                                  *
-   *    v (enabled)                        *
-   * SET_MIRROR_GROUP  * * * * * * * * * * *
+   *    v                                  *
+   * SET_MIRROR_GROUP_ENABLED  * * * * * * * 
    *    |                                  *
    *    v                            (if required)
    * NOTIFY_MIRRORING_WATCHER           cleanup
@@ -118,7 +121,8 @@ private:
   uint64_t m_snap_create_flags;
   uint32_t m_flags;
 
-  bool m_cleanup_image_states = false;
+  bool m_need_to_cleanup_mirror_images = false;
+  bool m_need_to_cleanup_mirror_group = false;
 
   void get_mirror_group();
   void handle_get_mirror_group(int r);
@@ -129,28 +133,31 @@ private:
   void list_group_images();
   void handle_list_group_images(int r);
 
-  void get_mirror_images();
-  void handle_get_mirror_images(int r);
+  void check_mirror_images_disabled();
+  void handle_check_mirror_images_disabled(int r);
 
   void open_images();
   void handle_open_images(int r);
 
   void validate_images();
-
-  void set_mirror_group();
-  void handle_set_mirror_group(int r);
-
+  
   void create_primary_group_snapshot();
   void handle_create_primary_group_snapshot(int r);
 
-  void update_primary_group_snapshot();
-  void handle_update_primary_group_snapshot(int r);
+  void set_mirror_group_enabling();
+  void handle_set_mirror_group_enabling(int r);
 
   void create_primary_image_snapshots();
   void handle_create_primary_image_snapshots(int r);
 
-  void update_mirror_image_states();
-  void handle_update_mirror_image_states(int r);
+  void update_primary_group_snapshot();
+  void handle_update_primary_group_snapshot(int r);
+
+  void set_mirror_images_enabled();
+  void handle_set_mirror_images_enabled(int r);
+
+  void set_mirror_group_enabled();
+  void handle_set_mirror_group_enabled(int r);
 
   void notify_mirroring_watcher();
   void handle_notify_mirroring_watcher(int r);
@@ -159,20 +166,20 @@ private:
   void handle_close_images(int r);
 
   // Cleanup
+  void disable_mirror_group();
+  void handle_disable_mirror_group(int r);
 
-  void remove_primary_group_snapshot();
-  void handle_remove_primary_group_snapshot(int r);
-
-  void cleanup_mirror_images();
+  void get_mirror_images_for_cleanup();
+  void handle_get_mirror_images_for_cleanup(int r);
 
   void disable_mirror_images();
   void handle_disable_mirror_images(int r);
 
-  void remove_image_states();
-  void handle_remove_image_states(int r);
+  void remove_primary_group_snapshot();
+  void handle_remove_primary_group_snapshot(int r);
 
-  void disable_mirror_group();
-  void handle_disable_mirror_group(int r);
+  void remove_mirror_images();
+  void handle_remove_mirror_images(int r);
 
   void remove_mirror_group();
   void handle_remove_mirror_group(int r);

@@ -161,10 +161,10 @@ set(librbd_internal_srcs
   mirror/PromoteRequest.cc
   mirror/snapshot/CreateNonPrimaryRequest.cc
   mirror/snapshot/CreatePrimaryRequest.cc
-  mirror/snapshot/CreatePrimaryRequest2.cc
   mirror/snapshot/DemoteRequest.cc
   mirror/snapshot/GetImageStateRequest.cc
   mirror/snapshot/GroupCreatePrimaryRequest.cc
+  mirror/snapshot/GroupImageCreatePrimaryRequest.cc
   mirror/snapshot/GroupUnlinkPeerRequest.cc
   mirror/snapshot/ImageMeta.cc
   mirror/snapshot/PromoteRequest.cc

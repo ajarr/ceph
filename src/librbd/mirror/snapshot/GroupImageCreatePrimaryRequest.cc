@@ -31,13 +31,11 @@ using librbd::util::snap_create_flags_api_to_internal;
 using librbd::util::get_default_snap_create_flags;
 template <typename I>
 GroupImageCreatePrimaryRequest<I>::GroupImageCreatePrimaryRequest(
-    std::vector<I *>&image_ctxs, std::vector<std::string> &global_image_ids,
-    std::vector<uint64_t> &clean_since_snap_ids,
+    std::vector<I *> &image_ctxs, std::vector<std::string> &global_image_ids,
     uint64_t group_snap_create_flags, uint32_t flags,
-    const std::string &group_snap_id, std::vector<uint64_t>&snap_ids,
+    const std::string &group_snap_id, std::vector<uint64_t> &snap_ids,
     Context *on_finish)
   : m_image_ctxs(image_ctxs), m_global_image_ids(global_image_ids),
-    m_clean_since_snap_ids(clean_since_snap_ids),
     m_group_snap_create_flags(group_snap_create_flags), m_flags(flags),
     m_group_snap_id(group_snap_id), m_snap_ids(snap_ids),
     m_on_finish(on_finish) {
@@ -229,7 +227,7 @@ void GroupImageCreatePrimaryRequest<I>::create_snapshots() {
       ((m_flags & CREATE_PRIMARY_FLAG_DEMOTED) != 0 ?
 	cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY_DEMOTED :
 	cls::rbd::MIRROR_SNAPSHOT_STATE_PRIMARY),
-	m_mirror_peer_uuids, "", m_clean_since_snap_ids[i]};
+	m_mirror_peer_uuids, "", CEPH_NOSNAP};
     ns.group_spec = m_image_ctxs[i]->group_spec;
     ns.group_snap_id = m_group_snap_id;
 

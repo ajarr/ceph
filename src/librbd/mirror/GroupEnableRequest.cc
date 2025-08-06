@@ -10,7 +10,6 @@
 #include "librbd/ImageState.h"
 #include "librbd/MirroringWatcher.h"
 #include "librbd/Utils.h"
-#include "librbd/mirror/GetMirrorImageRequest.h"
 #include "librbd/mirror/ImageStateUpdateRequest.h"
 #include "librbd/mirror/ImageRemoveRequest.h"
 #include "librbd/mirror/snapshot/GroupImageCreatePrimaryRequest.h"
@@ -233,32 +232,54 @@ void GroupEnableRequest<I>::check_mirror_images_disabled() {
 
   size_t i = 0;
   m_mirror_images.resize(m_images.size());
-  for (i = 0; i < m_images.size(); i++) {
-    auto image_spec = m_images[i].spec;
-    auto req = GetMirrorImageRequest<I>::create(m_group_ioctx, image_spec.image_id,
-                                                &m_mirror_images[i],
-                                                gather_ctx->new_sub());
-    req->send();
+  for ( ; i < m_images.size(); i++) {
+    librados::ObjectReadOperation op;
+    cls_client::mirror_image_get_start(&op, m_images[i].spec.image_id);
+
+    bufferlist *out_bl = new bufferlist();
+
+    auto on_mirror_image_get = new LambdaContext(
+      [this, i, out_bl, new_sub_ctx=gather_ctx->new_sub()](int r) {
+	if (r == 0) {
+	  auto iter = out_bl->cbegin();
+	  r = cls_client::mirror_image_get_finish(&iter, &m_mirror_images[i]);
+	}
+
+	if (r == -ENOENT) {
+	  // image is disabled for mirroring as required
+	  r = 0;
+	} else if (r == 0) {
+	  lderr(m_cct) << "image_id=" << m_images[i].spec.image_id
+                       << " is not disabled for mirroring" << dendl;
+          r = -EINVAL;
+	} else {
+	  lderr(m_cct) << "failed to get mirror image info for image_id="
+                       << m_images[i].spec.image_id << dendl;
+        }
+
+	free(out_bl);
+	new_sub_ctx->complete(r);
+      });
+
+    auto comp = create_rados_callback(on_mirror_image_get);
+
+    int r = m_group_ioctx.aio_operate(RBD_MIRRORING, comp, &op, out_bl);
+    ceph_assert(r == 0);
+    comp->release();
   }
+
   gather_ctx->activate();
 }
 
 template <typename I>
 void GroupEnableRequest<I>::handle_check_mirror_images_disabled(int r) {
   ldout(m_cct, 10) << "r=" << r <<  dendl;
+
   if (r < 0) {
-    ldout(m_cct, 10) << "failed to get mirror image info" << dendl;
+    lderr(m_cct) << "images not disabled for mirroring: "
+                 << cpp_strerror(r) << dendl;
     finish(r);
     return;
-  }
-
-  for (size_t i = 0; i < m_mirror_images.size(); i++) {
-    if (m_mirror_images[i].state != cls::rbd::MIRROR_IMAGE_STATE_DISABLED) {
-      lderr(m_cct) << "image is not disabled for mirroring: "
-                   << m_images[i].spec.image_id << dendl;
-      finish(-EINVAL);
-      return;
-    }
   }
 
   open_images();
@@ -293,16 +314,16 @@ void GroupEnableRequest<I>::open_images() {
       new ImageCtx("", m_images[i].spec.image_id.c_str(), nullptr, ioctxs[i],
                    false));
 
-  auto on_open = new LambdaContext(
-    [this, i, new_sub_ctx=gather_ctx->new_sub()](int r) {
-      // If asynchronous ImageState::open() fails, ImageState together with
-      // ImageCtx is destroyed. Simply NULL-out the respective image_ctxs[i]
-      // pointer to record that it's no longer valid.
-      if (r < 0) {
-        m_image_ctxs[i] = nullptr;
-      }
-      new_sub_ctx->complete(r);
-    });
+    auto on_open = new LambdaContext(
+      [this, i, new_sub_ctx=gather_ctx->new_sub()](int r) {
+	// If asynchronous ImageState::open() fails, ImageState together with
+	// ImageCtx is destroyed. Simply NULL-out the respective image_ctxs[i]
+	// pointer to record that it's no longer valid.
+	if (r < 0) {
+	  m_image_ctxs[i] = nullptr;
+	}
+	new_sub_ctx->complete(r);
+      });
 
     // Open parent as well to check if the image is a clone
     m_image_ctxs[i]->state->open(OPEN_FLAG_IGNORE_MIGRATING, on_open);
@@ -471,12 +492,10 @@ void GroupEnableRequest<I>::create_primary_image_snapshots() {
     &GroupEnableRequest<I>::handle_create_primary_image_snapshots>(this);
 
   m_snap_ids.resize(m_image_ctxs.size(), CEPH_NOSNAP);
-  m_clean_since_snap_ids.resize(m_image_ctxs.size(), CEPH_NOSNAP);
 
   // quiescing and requesting exclusive locks of images
   auto req = snapshot::GroupImageCreatePrimaryRequest<I>::create(
-    m_image_ctxs, m_global_image_ids, m_clean_since_snap_ids,
-    m_group_snap_create_flags,
+    m_image_ctxs, m_global_image_ids, m_group_snap_create_flags,
     snapshot::CREATE_PRIMARY_FLAG_IGNORE_EMPTY_PEERS, m_group_snap.id,
     m_snap_ids, ctx);
   req->send();
@@ -724,15 +743,38 @@ void GroupEnableRequest<I>::get_mirror_images_for_cleanup() {
     &GroupEnableRequest<I>::handle_get_mirror_images_for_cleanup>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
-  size_t i = 0;
-  for (i = 0; i < m_images.size(); i++) {
-    auto image_spec = m_images[i].spec;
-    auto req = GetMirrorImageRequest<I>::create(m_group_ioctx,
-                                                image_spec.image_id,
-                                                &m_mirror_images[i],
-                                                gather_ctx->new_sub());
-    req->send();
+  for (size_t i = 0; i < m_images.size(); i++) {
+    librados::ObjectReadOperation op;
+    cls_client::mirror_image_get_start(&op, m_images[i].spec.image_id);
+
+    bufferlist *out_bl = new bufferlist();
+
+    auto on_mirror_image_get = new LambdaContext(
+      [this, i, out_bl, new_sub_ctx=gather_ctx->new_sub()](int r) {
+	if (r == 0) {
+	  auto iter = out_bl->cbegin();
+	  r = cls_client::mirror_image_get_finish(&iter, &m_mirror_images[i]);
+	}
+
+	if (r == -ENOENT) {
+	  r = 0;
+	  m_mirror_images[i].state = cls::rbd::MIRROR_IMAGE_STATE_DISABLED;
+	} else if (r < 0) {
+	  lderr(m_cct) << "failed to get mirror image info for image_id="
+                       << m_images[i].spec.image_id << dendl;
+        }
+
+	free(out_bl);
+	new_sub_ctx->complete(r);
+      });
+
+    auto comp = create_rados_callback(on_mirror_image_get);
+
+    int r = m_group_ioctx.aio_operate(RBD_MIRRORING, comp, &op, out_bl);
+    ceph_assert(r == 0);
+    comp->release();
   }
+
   gather_ctx->activate();
 }
 

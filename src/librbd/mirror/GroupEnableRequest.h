@@ -116,7 +116,6 @@ private:
   cls::rbd::GroupSnapshot m_group_snap;
   std::vector<uint64_t> m_snap_ids;
   std::vector<std::string> m_global_image_ids;
-  std::vector<uint64_t> m_clean_since_snap_ids;
 
   bool m_need_to_cleanup_mirror_images = false;
   bool m_need_to_cleanup_mirror_group = false;

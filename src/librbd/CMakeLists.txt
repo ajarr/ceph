@@ -151,7 +151,6 @@ set(librbd_internal_srcs
   mirror/DisableRequest.cc
   mirror/EnableRequest.cc
   mirror/GetInfoRequest.cc
-  mirror/GetMirrorImageRequest.cc
   mirror/GetStatusRequest.cc
   mirror/GetUuidRequest.cc
   mirror/GroupEnableRequest.cc

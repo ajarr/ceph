@@ -26,21 +26,19 @@ template <typename ImageCtxT = librbd::ImageCtx>
 class GroupImageCreatePrimaryRequest {
 public:
   static GroupImageCreatePrimaryRequest *create(
-      std::vector<ImageCtxT *>&image_ctxs,
+      std::vector<ImageCtxT *> &image_ctxs,
       std::vector<std::string> &global_image_ids,
-      std::vector<uint64_t> &clean_since_snap_ids,
       uint64_t group_snap_create_flags, uint32_t flags,
       const std::string &group_snap_id, std::vector<uint64_t> &snap_ids,
       Context *on_finish) {
     return new GroupImageCreatePrimaryRequest(
-      image_ctxs, global_image_ids, clean_since_snap_ids,
-      group_snap_create_flags, flags, group_snap_id, snap_ids, on_finish);
+      image_ctxs, global_image_ids, group_snap_create_flags, flags,
+      group_snap_id, snap_ids, on_finish);
   }
 
   GroupImageCreatePrimaryRequest(
     std::vector<ImageCtxT *> &image_ctxs,
     std::vector<std::string> &global_image_ids,
-    std::vector<uint64_t> &clean_since_snap_ids,
     uint64_t group_snap_create_flags, uint32_t flags,
     const std::string &group_snap_id, std::vector<uint64_t> &snap_ids,
     Context *on_finish);
@@ -82,7 +80,6 @@ private:
 
   std::vector<ImageCtxT *>m_image_ctxs;
   std::vector<std::string> m_global_image_ids;
-  std::vector<uint64_t> m_clean_since_snap_ids;
   uint64_t m_group_snap_create_flags;
   const uint32_t m_flags;
   const std::string m_group_snap_id;

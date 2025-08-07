@@ -59,11 +59,11 @@ private:
    *    v  (skip if not needed)            *
    * VALIDATE_IMAGES   * * * * * * * * * * *
    *    |                                  *
-   *    v (incomplete)                     *
-   * CREATE_PRIMARY_GROUP_SNAP * * * * * * *
-   *    |                                  *
    *    v                                  *
    * SET_MIRROR_GROUP_ENABLING * * * * * * *
+   *    |                                  *
+   *    v (incomplete)                     *
+   * CREATE_PRIMARY_GROUP_SNAP * * * * * * *
    *    |                                  *
    *    v (skip if not needed)             *
    * CREATE_PRIMARY_IMAGE_SNAPS            *
@@ -117,8 +117,8 @@ private:
   std::vector<uint64_t> m_snap_ids;
   std::vector<std::string> m_global_image_ids;
 
+  bool m_need_to_cleanup_group_snapshot = false;
   bool m_need_to_cleanup_mirror_images = false;
-  bool m_need_to_cleanup_mirror_group = false;
 
   void get_mirror_group();
   void handle_get_mirror_group(int r);

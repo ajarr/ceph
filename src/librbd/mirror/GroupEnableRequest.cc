@@ -215,7 +215,7 @@ void GroupEnableRequest<I>::handle_list_group_images(int r) {
   }
 
   if (m_images.empty()) {
-    create_primary_group_snapshot();
+    set_mirror_group_enabling();
   } else {
     check_mirror_images_disabled();
   }
@@ -380,6 +380,38 @@ void GroupEnableRequest<I>::validate_images() {
     }
   }
 
+  set_mirror_group_enabling();
+}
+
+template <typename I>
+void GroupEnableRequest<I>::set_mirror_group_enabling() {
+  ldout(m_cct, 10) << dendl;
+
+  m_mirror_group.state = cls::rbd::MIRROR_GROUP_STATE_ENABLING;
+
+  librados::ObjectWriteOperation op;
+  cls_client::mirror_group_set(&op, m_group_id, m_mirror_group);
+  auto aio_comp = create_rados_callback<
+    GroupEnableRequest<I>,
+    &GroupEnableRequest<I>::handle_set_mirror_group_enabling>(this);
+  int r = m_group_ioctx.aio_operate(RBD_MIRRORING, aio_comp, &op);
+  ceph_assert(r == 0);
+  aio_comp->release();
+}
+
+template <typename I>
+void GroupEnableRequest<I>::handle_set_mirror_group_enabling(int r) {
+  ldout(m_cct, 10) << "r=" << r << dendl;
+
+  if (r < 0) {
+    lderr(m_cct) << "failed to set mirror group as enabling: "
+                 << cpp_strerror(r) << dendl;
+    m_ret_val = r;
+
+    close_images();
+    return;
+  }
+
   create_primary_group_snapshot();
 }
 
@@ -425,46 +457,11 @@ void GroupEnableRequest<I>::handle_create_primary_group_snapshot(int r) {
                  << cpp_strerror(r) << dendl;
     m_ret_val = r;
 
-    close_images();
+    disable_mirror_group();
     return;
   }
 
-  // TODO(rraja): Setting ENABLING mirror group state on-disk after creating
-  // incomplete group snap is different from previous order of operations. The
-  // order is swapped. Determine whether this is okay.
-  set_mirror_group_enabling();
-}
-
-template <typename I>
-void GroupEnableRequest<I>::set_mirror_group_enabling() {
-  ldout(m_cct, 10) << dendl;
-
-  m_mirror_group.state = cls::rbd::MIRROR_GROUP_STATE_ENABLING;
-
-  librados::ObjectWriteOperation op;
-  cls_client::mirror_group_set(&op, m_group_id, m_mirror_group);
-  auto aio_comp = create_rados_callback<
-    GroupEnableRequest<I>,
-    &GroupEnableRequest<I>::handle_set_mirror_group_enabling>(this);
-  int r = m_group_ioctx.aio_operate(RBD_MIRRORING, aio_comp, &op);
-  ceph_assert(r == 0);
-  aio_comp->release();
-}
-
-template <typename I>
-void GroupEnableRequest<I>::handle_set_mirror_group_enabling(int r) {
-  ldout(m_cct, 10) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(m_cct) << "failed to set mirror group as enabling: "
-                 << cpp_strerror(r) << dendl;
-    m_ret_val = r;
-
-    remove_primary_group_snapshot();
-    return;
-  }
-
-  m_need_to_cleanup_mirror_group = true;
+  m_need_to_cleanup_group_snapshot = true;
 
   if (m_image_ctxs.empty()) {
     update_primary_group_snapshot();
@@ -726,8 +723,10 @@ void GroupEnableRequest<I>::handle_disable_mirror_group(int r) {
 
   if (m_need_to_cleanup_mirror_images) {
     get_mirror_images_for_cleanup();
-  } else {
+  } else if (m_need_to_cleanup_group_snapshot) {
     remove_primary_group_snapshot();
+  } else {
+    remove_mirror_group();
   }
 }
 
@@ -853,10 +852,8 @@ void GroupEnableRequest<I>::handle_remove_primary_group_snapshot(int r) {
 
   if (m_need_to_cleanup_mirror_images) {
     remove_mirror_images();
-  } else if (m_need_to_cleanup_mirror_group) {
-    remove_mirror_group();
   } else {
-    close_images();
+    remove_mirror_group();
   }
 }
 

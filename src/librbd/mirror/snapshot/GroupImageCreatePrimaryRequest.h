@@ -26,19 +26,19 @@ template <typename ImageCtxT = librbd::ImageCtx>
 class GroupImageCreatePrimaryRequest {
 public:
   static GroupImageCreatePrimaryRequest *create(
-      std::vector<ImageCtxT *> &image_ctxs,
-      std::vector<std::string> &global_image_ids,
+      CephContext* cct, const std::vector<ImageCtxT *> &image_ctxs,
+      const std::vector<std::string> &global_image_ids,
       uint64_t group_snap_create_flags, uint32_t flags,
       const std::string &group_snap_id, std::vector<uint64_t> &snap_ids,
       Context *on_finish) {
     return new GroupImageCreatePrimaryRequest(
-      image_ctxs, global_image_ids, group_snap_create_flags, flags,
+      cct, image_ctxs, global_image_ids, group_snap_create_flags, flags,
       group_snap_id, snap_ids, on_finish);
   }
 
   GroupImageCreatePrimaryRequest(
-    std::vector<ImageCtxT *> &image_ctxs,
-    std::vector<std::string> &global_image_ids,
+    CephContext* cct, const std::vector<ImageCtxT *> &image_ctxs,
+    const std::vector<std::string> &global_image_ids,
     uint64_t group_snap_create_flags, uint32_t flags,
     const std::string &group_snap_id, std::vector<uint64_t> &snap_ids,
     Context *on_finish);
@@ -78,25 +78,23 @@ private:
    * @endverbatim
    */
 
-  std::vector<ImageCtxT *>m_image_ctxs;
-  std::vector<std::string> m_global_image_ids;
+  CephContext *m_cct;
+  const std::vector<ImageCtxT *> &m_image_ctxs;
+  const std::vector<std::string> &m_global_image_ids;
   uint64_t m_group_snap_create_flags;
   const uint32_t m_flags;
   const std::string m_group_snap_id;
   std::vector<uint64_t> &m_snap_ids;
   Context *m_on_finish;
-  CephContext *m_cct;
 
-//For now assume the same ioctx for mirror_peers
-  librados::IoCtx m_default_ns_ctx;
-  std::set<std::string> m_mirror_peer_uuids;
+  std::vector<librados::IoCtx> m_default_ns_ctxs;
+  std::vector<std::set<std::string>> m_mirror_peers_uuids;
   std::vector<std::string> m_snap_names;
 
   std::vector<uint64_t> m_quiesce_requests;
   bool m_release_locks = false;
   int m_ret_code = 0;
 
-  bufferlist m_out_bl;
   NoOpProgressContext m_prog_ctx;
 
   void get_mirror_peers();

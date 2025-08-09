@@ -230,9 +230,8 @@ void GroupEnableRequest<I>::check_mirror_images_disabled() {
     &GroupEnableRequest<I>::handle_check_mirror_images_disabled>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
 
-  size_t i = 0;
   m_mirror_images.resize(m_images.size());
-  for ( ; i < m_images.size(); i++) {
+  for (size_t i = 0; i < m_images.size(); i++) {
     librados::ObjectReadOperation op;
     cls_client::mirror_image_get_start(&op, m_images[i].spec.image_id);
 
@@ -293,7 +292,6 @@ void GroupEnableRequest<I>::open_images() {
     GroupEnableRequest<I>, &GroupEnableRequest<I>::handle_open_images>(this);
   auto gather_ctx = new C_Gather(m_cct, ctx);
   int r = 0;
-  size_t i = 0;
   std::vector<librados::IoCtx> ioctxs;
 
   for (const auto& image: m_images) {
@@ -309,7 +307,7 @@ void GroupEnableRequest<I>::open_images() {
     ioctxs.push_back(std::move(image_io_ctx));
   }
 
-  for ( ; i < m_images.size(); i++) {
+  for (size_t i = 0; i < m_images.size(); i++) {
     m_image_ctxs.push_back(
       new ImageCtx("", m_images[i].spec.image_id.c_str(), nullptr, ioctxs[i],
                    false));
@@ -492,7 +490,7 @@ void GroupEnableRequest<I>::create_primary_image_snapshots() {
 
   // quiescing and requesting exclusive locks of images
   auto req = snapshot::GroupImageCreatePrimaryRequest<I>::create(
-    m_image_ctxs, m_global_image_ids, m_group_snap_create_flags,
+    m_cct, m_image_ctxs, m_global_image_ids, m_group_snap_create_flags,
     snapshot::CREATE_PRIMARY_FLAG_IGNORE_EMPTY_PEERS, m_group_snap.id,
     m_snap_ids, ctx);
   req->send();
@@ -578,7 +576,7 @@ void GroupEnableRequest<I>::set_mirror_images_enabled() {
 
     auto req = ImageStateUpdateRequest<I>::create(
      ictx->md_ctx, ictx->id, cls::rbd::MIRROR_IMAGE_STATE_ENABLED,
-      m_mirror_images[i], gather_ctx->new_sub());
+     m_mirror_images[i], gather_ctx->new_sub());
 
     req->send();
   }

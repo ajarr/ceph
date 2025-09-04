@@ -2818,6 +2818,8 @@ test_force_promote_delete_group()
 
   # disable and re-enable on original primary
   mirror_group_disable "${primary_cluster}" "${pool}/${group0}"
+  wait_for_group_present "${primary_cluster}" "${pool}" "${group0}" "${image_count}"
+  wait_for_group_not_present "${secondary_cluster}" "${pool}" "${group0}"
   mirror_group_enable "${primary_cluster}" "${pool}/${group0}"
 
   # confirm that group is mirrored back to secondary

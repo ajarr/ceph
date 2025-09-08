@@ -2816,13 +2816,24 @@ test_force_promote_delete_group()
   group_remove "${secondary_cluster}" "${pool}/${group0}"
   images_remove "${secondary_cluster}" "${pool}/${image_prefix}" "${image_count}"
 
+  # confirm that group is mirrored back to secondary
+  wait_for_group_present "${secondary_cluster}" "${pool}" "${group0}" "${image_count}"
+  wait_for_group_replay_started "${secondary_cluster}" "${pool}"/"${group0}" "${image_count}"
+  wait_for_group_status_in_pool_dir "${secondary_cluster}" "${pool}"/"${group0}" 'up+replaying' "${image_count}"
+
+  if [ -z "${RBD_MIRROR_USE_RBD_MIRROR}" ]; then
+    wait_for_group_status_in_pool_dir "${primary_cluster}" "${pool}"/"${group0}" 'up+stopped' "${image_count}"
+  fi
+
+  wait_for_group_synced "${primary_cluster}" "${pool}"/"${group0}" "${secondary_cluster}" "${pool}"/"${group0}"
+
   # disable and re-enable on original primary
-  mirror_group_disable "${primary_cluster}" "${pool}/${group0}"
-  mirror_group_enable "${primary_cluster}" "${pool}/${group0}"
+  #  mirror_group_disable "${primary_cluster}" "${pool}/${group0}"
+  #  mirror_group_enable "${primary_cluster}" "${pool}/${group0}"
 
   # confirm that group is mirrored back to secondary
-  wait_for_group_present "${primary_cluster}" "${pool}" "${group0}" "${image_count}"
-  wait_for_group_present "${secondary_cluster}" "${pool}" "${group0}" "${image_count}"
+  # wait_for_group_present "${primary_cluster}" "${pool}" "${group0}" "${image_count}"
+  # wait_for_group_present "${secondary_cluster}" "${pool}" "${group0}" "${image_count}"
 
   # tidy up
   mirror_group_disable "${primary_cluster}" "${pool}/${group0}"

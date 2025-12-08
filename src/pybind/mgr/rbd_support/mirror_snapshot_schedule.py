@@ -528,7 +528,7 @@ class MirrorSnapshotScheduleHandler:
                     pool_id, namespace, image_id))
             return
 
-        schedule_time = schedule.next_run(now)
+        schedule_time = schedule.next_run_with_offset(now, image_id)
         if schedule_time not in self.queue:
             self.queue[schedule_time] = []
         self.log.debug(
